@@ -1,0 +1,42 @@
+diff --git a/django/db/models/sql/datastructures.py b/django/db/models/sql/datastructures.py
+index 1edf040e82..1799a12277 100644
+--- a/django/db/models/sql/datastructures.py
++++ b/django/db/models/sql/datastructures.py
+@@ -162,8 +162,22 @@ class Join:
+         return hash(self.identity)
+ 
+     def equals(self, other):
+-        # Ignore filtered_relation in equality check.
+-        return self.identity[:-1] == other.identity[:-1]
++        # Check base identity (table, parent, join_field).
++        if self.identity[:-1] != other.identity[:-1]:
++            return False
++        # If both have filtered_relation, they must be equal.
++        if self.filtered_relation is not None and other.filtered_relation is not None:
++            return self.filtered_relation == other.filtered_relation
++        # If neither has filtered_relation, they're equal.
++        if self.filtered_relation is None and other.filtered_relation is None:
++            return True
++        # A join with filtered_relation can be reused for a join without
++        # one (the filtered relation is a subset of the unfiltered one).
++        # But a join without filtered_relation cannot be reused for a join
++        # with one.
++        if self.filtered_relation is not None and other.filtered_relation is None:
++            return True
++        return False
+ 
+     def demote(self):
+         new = self.relabeled_clone({})
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index 54f3258eac..ed016edfd5 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -1818,7 +1818,7 @@ class Query(BaseExpression):
+                 nullable,
+                 filtered_relation=filtered_relation,
+             )
+-            reuse = can_reuse if join.m2m else None
++            reuse = can_reuse if join.m2m else can_reuse
+             alias = self.join(connection, reuse=reuse)
+             joins.append(alias)
+             if filtered_relation:
