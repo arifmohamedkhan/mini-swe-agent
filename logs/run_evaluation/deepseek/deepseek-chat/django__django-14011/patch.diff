@@ -1,0 +1,50 @@
+diff --git a/django/core/servers/basehttp.py b/django/core/servers/basehttp.py
+index 14dab517c9..cb859287d8 100644
+--- a/django/core/servers/basehttp.py
++++ b/django/core/servers/basehttp.py
+@@ -81,6 +81,29 @@ class ThreadedWSGIServer(socketserver.ThreadingMixIn, WSGIServer):
+     """A threaded version of the WSGIServer"""
+     daemon_threads = True
+ 
++    def process_request(self, request, client_address):
++        """Start a new thread to process the request."""
++        t = threading.Thread(
++            target=self.process_request_thread,
++            args=(request, client_address),
++        )
++        t.daemon = self.daemon_threads
++        # Track all threads (including daemon threads) so they can be
++        # joined before closing database connections.
++        if not hasattr(self, '_all_threads'):
++            self._all_threads = []
++        self._all_threads.append(t)
++        t.start()
++
++    def server_close(self):
++        super().server_close()
++        # Wait for all request threads to finish, not just non-daemon ones.
++        # This is necessary because daemon threads are not tracked by
++        # ThreadingMixIn._Threads.
++        if hasattr(self, '_all_threads'):
++            for thread in self._all_threads:
++                thread.join()
++
+ 
+ class ServerHandler(simple_server.ServerHandler):
+     http_version = '1.1'
+diff --git a/django/test/testcases.py b/django/test/testcases.py
+index 92f566b7b0..542fba0e6b 100644
+--- a/django/test/testcases.py
++++ b/django/test/testcases.py
+@@ -1511,6 +1511,11 @@ class LiveServerThread(threading.Thread):
+             self.error = e
+             self.is_ready.set()
+         finally:
++            # Wait for all request threads to finish before closing
++            # database connections, to avoid the database being accessed
++            # by other threads during shutdown.
++            if hasattr(self, 'httpd'):
++                self.httpd.server_close()
+             connections.close_all()
+ 
+     def _create_server(self):
