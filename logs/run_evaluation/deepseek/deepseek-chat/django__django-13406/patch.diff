@@ -1,0 +1,60 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+index b48d0df9c0..b5f55536c1 100644
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -197,6 +197,10 @@ class QuerySet:
+         self._known_related_objects = {}  # {rel_field: {pk: rel_obj}}
+         self._iterable_class = ModelIterable
+         self._fields = None
++        if self._query._iterable_class is not None:
++            self._iterable_class = self._query._iterable_class
++        if self._query._fields is not None:
++            self._fields = self._query._fields
+         self._defer_next_filter = False
+         self._deferred_filter = None
+ 
+@@ -211,6 +215,10 @@ class QuerySet:
+     @query.setter
+     def query(self, value):
+         self._query = value
++        if value._iterable_class is not None:
++            self._iterable_class = value._iterable_class
++        if value._fields is not None:
++            self._fields = value._fields
+ 
+     def as_manager(cls):
+         # Address the circular dependency between `Queryset` and `Manager`.
+@@ -829,6 +837,8 @@ class QuerySet:
+         fields += tuple(expressions)
+         clone = self._values(*fields, **expressions)
+         clone._iterable_class = ValuesIterable
++        clone.query._iterable_class = ValuesIterable
++        clone.query._fields = clone._fields
+         return clone
+ 
+     def values_list(self, *fields, flat=False, named=False):
+@@ -860,6 +870,8 @@ class QuerySet:
+             else FlatValuesListIterable if flat
+             else ValuesListIterable
+         )
++        clone.query._iterable_class = clone._iterable_class
++        clone.query._fields = clone._fields
+         return clone
+ 
+     def dates(self, field_name, kind, order='ASC'):
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index 4648daf395..f12a00f448 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -199,6 +199,11 @@ class Query(BaseExpression):
+         # excluding annotation_select and extra_select.
+         self.values_select = ()
+ 
++        # These are set by values() and values_list() to control the
++        # iterable class used when evaluating the queryset.
++        self._iterable_class = None
++        self._fields = None
++
+         # SQL annotation-related attributes
+         self.annotations = {}  # Maps alias -> Annotation Expression
+         self.annotation_select_mask = None
