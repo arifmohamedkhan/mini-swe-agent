@@ -1,0 +1,33 @@
+diff --git a/django/utils/autoreload.py b/django/utils/autoreload.py
+index b8efb9f881..5db3042fcd 100644
+--- a/django/utils/autoreload.py
++++ b/django/utils/autoreload.py
+@@ -216,16 +216,21 @@ def get_child_arguments():
+     executable is reported to not have the .exe extension which can cause bugs
+     on reloading.
+     """
+-    import django.__main__
+-    django_main_path = Path(django.__main__.__file__)
++    import __main__
++    spec = __main__.__spec__
++    # If -m was used, then __main__.__spec__ is set and __main__.__spec__.parent
++    # is the dotted package path (e.g. "django" for "python -m django").
++    # If a directory or zipfile was used, __main__.__spec__.parent is "".
++    if spec is not None and spec.parent:
++        args = [sys.executable] + ['-W%s' % o for o in sys.warnoptions]
++        args += ['-m', spec.parent]
++        args += sys.argv[1:]
++        return args
++
+     py_script = Path(sys.argv[0])
+ 
+     args = [sys.executable] + ['-W%s' % o for o in sys.warnoptions]
+-    if py_script == django_main_path:
+-        # The server was started with `python -m django runserver`.
+-        args += ['-m', 'django']
+-        args += sys.argv[1:]
+-    elif not py_script.exists():
++    if not py_script.exists():
+         # sys.argv[0] may not exist for several reasons on Windows.
+         # It may exist with a .exe extension or have a -script.py suffix.
+         exe_entrypoint = py_script.with_suffix('.exe')

@@ -1,0 +1,54 @@
+diff --git a/django/db/models/base.py b/django/db/models/base.py
+index 55b1691166..9891ff6163 100644
+--- a/django/db/models/base.py
++++ b/django/db/models/base.py
+@@ -19,6 +19,7 @@ from django.db import (
+ from django.db.models import (
+     NOT_PROVIDED, ExpressionWrapper, IntegerField, Max, Value,
+ )
++from django.db.models.expressions import Col
+ from django.db.models.constants import LOOKUP_SEP
+ from django.db.models.constraints import CheckConstraint, UniqueConstraint
+ from django.db.models.deletion import CASCADE, Collector
+@@ -871,7 +872,10 @@ class Model(metaclass=ModelBase):
+             returning_fields = meta.db_returning_fields
+             results = self._do_insert(cls._base_manager, using, fields, returning_fields, raw)
+             if results:
++                connection = connections[using]
+                 for value, field in zip(results[0], returning_fields):
++                    for converter in (connection.ops.get_db_converters(Col(None, field)) + field.get_db_converters(connection)):
++                        value = converter(value, field, connection)
+                     setattr(self, field.attname, value)
+         return updated
+ 
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+index 387deca527..6f746a77f4 100644
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -17,7 +17,7 @@ from django.db import (
+ from django.db.models import AutoField, DateField, DateTimeField, sql
+ from django.db.models.constants import LOOKUP_SEP
+ from django.db.models.deletion import Collector
+-from django.db.models.expressions import Case, Expression, F, Ref, Value, When
++from django.db.models.expressions import Case, Col, Expression, F, Ref, Value, When
+ from django.db.models.functions import Cast, Trunc
+ from django.db.models.query_utils import FilteredRelation, Q
+ from django.db.models.sql.constants import CURSOR, GET_ITERATOR_CHUNK_SIZE
+@@ -505,6 +505,8 @@ class QuerySet:
+                 for obj_with_pk, results in zip(objs_with_pk, returned_columns):
+                     for result, field in zip(results, opts.db_returning_fields):
+                         if field != opts.pk:
++                            for converter in (connection.ops.get_db_converters(Col(None, field)) + field.get_db_converters(connection)):
++                                result = converter(result, field, connection)
+                             setattr(obj_with_pk, field.attname, result)
+                 for obj_with_pk in objs_with_pk:
+                     obj_with_pk._state.adding = False
+@@ -518,6 +520,8 @@ class QuerySet:
+                     assert len(returned_columns) == len(objs_without_pk)
+                 for obj_without_pk, results in zip(objs_without_pk, returned_columns):
+                     for result, field in zip(results, opts.db_returning_fields):
++                        for converter in (connection.ops.get_db_converters(Col(None, field)) + field.get_db_converters(connection)):
++                            result = converter(result, field, connection)
+                         setattr(obj_without_pk, field.attname, result)
+                     obj_without_pk._state.adding = False
+                     obj_without_pk._state.db = self.db
