@@ -1,0 +1,80 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+index 59a5d6abbb..31c4fe5d54 100644
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -1836,7 +1836,17 @@ class SQLUpdateCompiler(SQLCompiler):
+         query.clear_ordering(force=True)
+         query.extra = {}
+         query.select = []
+-        query.add_fields([query.get_meta().pk.name])
++        # If there are related updates, we need to also select the parent
++        # link fields so we can filter each parent table with the correct IDs.
++        if self.query.related_updates:
++            field_names = [query.get_meta().pk.name]
++            for model in self.query.related_updates:
++                link_field = query.get_meta().parents[model]
++                if link_field is not None:
++                    field_names.append(link_field.name)
++            query.add_fields(field_names)
++        else:
++            query.add_fields([query.get_meta().pk.name])
+         super().pre_sql_setup()
+ 
+         must_pre_select = (
+@@ -1851,10 +1861,21 @@ class SQLUpdateCompiler(SQLCompiler):
+             # don't want them to change), or the db backend doesn't support
+             # selecting from the updating table (e.g. MySQL).
+             idents = []
++            related_ids = {}
+             for rows in query.get_compiler(self.using).execute_sql(MULTI):
+-                idents.extend(r[0] for r in rows)
++                for row in rows:
++                    idents.append(row[0])
++                    # If there are related updates, row[0] is the child PK,
++                    # and subsequent columns are the parent link field values.
++                    if self.query.related_updates:
++                        col_idx = 1
++                        for model in self.query.related_updates:
++                            link_field = query.get_meta().parents[model]
++                            if link_field is not None:
++                                related_ids.setdefault(model, []).append(row[col_idx])
++                                col_idx += 1
+             self.query.add_filter("pk__in", idents)
+-            self.query.related_ids = idents
++            self.query.related_ids = related_ids if self.query.related_updates else idents
+         else:
+             # The fast path. Filters and updates in one query.
+             self.query.add_filter("pk__in", query)
+diff --git a/django/db/models/sql/subqueries.py b/django/db/models/sql/subqueries.py
+index 04063f73bc..28629a92db 100644
+--- a/django/db/models/sql/subqueries.py
++++ b/django/db/models/sql/subqueries.py
+@@ -60,12 +60,13 @@ class UpdateQuery(Query):
+         would normally be set in __init__() should go here instead.
+         """
+         self.values = []
+-        self.related_ids = None
++        self.related_ids = {}
+         self.related_updates = {}
+ 
+     def clone(self):
+         obj = super().clone()
+         obj.related_updates = self.related_updates.copy()
++        obj.related_ids = self.related_ids.copy()
+         return obj
+ 
+     def update_batch(self, pk_list, values, using):
+@@ -133,8 +134,12 @@ class UpdateQuery(Query):
+         for model, values in self.related_updates.items():
+             query = UpdateQuery(model)
+             query.values = values
+-            if self.related_ids is not None:
+-                query.add_filter("pk__in", self.related_ids)
++            if self.related_ids:
++                query.add_filter("pk__in", self.related_ids[model])
++            else:
++                # related_ids is an empty dict (no rows matched), add a
++                # filter that will never match to avoid updating all rows.
++                query.add_filter("pk__in", [])
+             result.append(query)
+         return result
