@@ -1,0 +1,41 @@
+diff --git a/sphinx/directives/other.py b/sphinx/directives/other.py
+index 19f7c0a8d..76c691498 100644
+--- a/sphinx/directives/other.py
++++ b/sphinx/directives/other.py
+@@ -1,6 +1,8 @@
+ from __future__ import annotations
+ 
++import os
+ import re
++import tempfile
+ from typing import TYPE_CHECKING, Any, cast
+ 
+ from docutils import nodes
+@@ -376,7 +378,26 @@ class Include(BaseInclude, SphinxDirective):
+         rel_filename, filename = self.env.relfn2path(self.arguments[0])
+         self.arguments[0] = filename
+         self.env.note_included(filename)
+-        return super().run()
++        # Read the included file and emit the "source-read" event
++        encoding = self.options.get(
++            'encoding', self.state.document.settings.input_encoding)
++        with open(filename, encoding=encoding) as f:
++            content = f.read()
++        arg = [content]
++        self.env.events.emit('source-read', rel_filename, arg)
++        # Write the modified content to a temporary file and use that instead
++        tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.rst', delete=False)
++        try:
++            tmp.write(arg[0])
++            tmp.close()
++            self.arguments[0] = tmp.name
++            result = super().run()
++        finally:
++            os.unlink(tmp.name)
++        # Record the original file as a dependency (the parent's run() records
++        # the temp file, but we need the original file to be tracked)
++        self.state.document.settings.record_dependencies.add(filename)
++        return result
+ 
+ 
+ def setup(app: Sphinx) -> dict[str, Any]:
