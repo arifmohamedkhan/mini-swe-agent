@@ -1,0 +1,51 @@
+diff --git a/sphinx/ext/autodoc/__init__.py b/sphinx/ext/autodoc/__init__.py
+index f8e4be999..fee82b170 100644
+--- a/sphinx/ext/autodoc/__init__.py
++++ b/sphinx/ext/autodoc/__init__.py
+@@ -1062,11 +1062,34 @@ class DocstringSignatureMixin:
+                     valid_names.extend(cls.__name__ for cls in self.object.__mro__)
+             if base not in valid_names:
+                 continue
++            # determine how many signature lines we have
++            # (all consecutive lines at the start of the docstring that match)
++            num_sig_lines = 1
++            for j in range(1, len(doclines)):
++                match_j = py_ext_sig_re.match(doclines[j])
++                if not match_j:
++                    break
++                exmod_j, path_j, base_j, args_j, retann_j = match_j.groups()
++                if base_j not in valid_names:
++                    break
++                num_sig_lines += 1
+             # re-prepare docstring to ignore more leading indentation
+             tab_width = self.directive.state.document.settings.tab_width  # type: ignore
+-            self._new_docstrings[i] = prepare_docstring('\n'.join(doclines[1:]),
+-                                                        tabsize=tab_width)
+-            result = args, retann
++            self._new_docstrings[i] = prepare_docstring(
++                '\n'.join(doclines[num_sig_lines:]), tabsize=tab_width)
++            if num_sig_lines == 1:
++                result = args, retann
++            else:
++                # multiple overloaded signatures: combine them
++                sig_lines = []
++                for j in range(num_sig_lines):
++                    match_j = py_ext_sig_re.match(doclines[j])
++                    exmod_j, path_j, base_j, args_j, retann_j = match_j.groups()
++                    if retann_j:
++                        sig_lines.append("(%s) -> %s" % (args_j, retann_j))
++                    else:
++                        sig_lines.append("(%s)" % args_j)
++                result = "\n".join(sig_lines), None
+             # don't look any further
+             break
+         return result
+@@ -1088,6 +1111,10 @@ class DocstringSignatureMixin:
+             result = self._find_signature()
+             if result is not None:
+                 self.args, self.retann = result
++        if self.args is not None and "\n" in self.args:
++            # multiple overloaded signatures (from _find_signature)
++            # args already contains the full signature with parens and return annotation
++            return self.args
+         return super().format_signature(**kwargs)  # type: ignore
