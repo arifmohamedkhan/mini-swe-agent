@@ -1,0 +1,46 @@
+diff --git a/django/forms/models.py b/django/forms/models.py
+index 3fa04b821f..962c25fbb4 100644
+--- a/django/forms/models.py
++++ b/django/forms/models.py
+@@ -1172,13 +1172,9 @@ class BaseInlineFormSet(BaseModelFormSet):
+ 
+         # If we're adding a new object, ignore a parent's auto-generated key
+         # as it will be regenerated on the save request.
+-        if self.instance._state.adding:
+-            if kwargs.get("to_field") is not None:
+-                to_field = self.instance._meta.get_field(kwargs["to_field"])
+-            else:
+-                to_field = self.instance._meta.pk
+-            if to_field.has_default():
+-                setattr(self.instance, to_field.attname, None)
++        if self.instance._state.adding and kwargs.get("to_field") is None:
++            if self.instance._meta.pk.has_default():
++                self.instance.pk = None
+ 
+         form.fields[name] = InlineForeignKeyField(self.instance, **kwargs)
+ 
+diff --git a/tests/model_formsets/test_uuid.py b/tests/model_formsets/test_uuid.py
+index 2097bde82b..f885cbbf82 100644
+--- a/tests/model_formsets/test_uuid.py
++++ b/tests/model_formsets/test_uuid.py
+@@ -80,14 +80,15 @@ class InlineFormsetTests(TestCase):
+         formset = FormSet()
+         self.assertIsNone(formset.forms[0].fields["parent"].initial)
+ 
+-    def test_inlineformset_factory_nulls_default_pks_alternate_key_relation(self):
++    def test_inlineformset_factory_alternate_key_relation(self):
+         """
+-        #24958 - Variant of test_inlineformset_factory_nulls_default_pks for
+-        the case of a parent object with a UUID alternate key and a child
+-        object that relates to that alternate key.
++        A parent object with a UUID alternate key (not a PK) and a child
++        object that relates to that alternate key. The alternate key's value
++        should not be nullified as it's not the primary key.
+         """
+         FormSet = inlineformset_factory(
+             ParentWithUUIDAlternateKey, ChildRelatedViaAK, fields="__all__"
+         )
+         formset = FormSet()
+-        self.assertIsNone(formset.forms[0].fields["parent"].initial)
++        # The alternate key value should be preserved (not set to None).
++        self.assertIsNotNone(formset.forms[0].fields["parent"].initial)
