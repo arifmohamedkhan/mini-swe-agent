@@ -1,0 +1,32 @@
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+index abc6f79a15..50926fd1aa 100644
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -57,6 +57,27 @@ class CommandParser(ArgumentParser):
+         self.called_from_command_line = called_from_command_line
+         super().__init__(**kwargs)
+ 
++    def add_subparsers(self, **kwargs):
++        """
++        Override default add_subparsers() to preserve the keyword arguments
++        of the CommandParser (missing_args_message, called_from_command_line)
++        when creating subparsers.
++        """
++        # Preserve the extra kwargs for subparsers
++        subparsers_action = super().add_subparsers(**kwargs)
++        
++        # Store the original add_parser method
++        original_add_parser = subparsers_action.add_parser
++        
++        def _add_parser(name, **parser_kwargs):
++            # Pass through the CommandParser-specific kwargs
++            parser_kwargs.setdefault('missing_args_message', self.missing_args_message)
++            parser_kwargs.setdefault('called_from_command_line', self.called_from_command_line)
++            return original_add_parser(name, **parser_kwargs)
++        
++        subparsers_action.add_parser = _add_parser
++        return subparsers_action
++
+     def parse_args(self, args=None, namespace=None):
+         # Catch missing argument for a better error message
+         if self.missing_args_message and not (
