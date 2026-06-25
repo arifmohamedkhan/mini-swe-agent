@@ -1,0 +1,31 @@
+diff --git a/sympy/simplify/simplify.py b/sympy/simplify/simplify.py
+index c6b511f20..ede62983f 100644
+--- a/sympy/simplify/simplify.py
++++ b/sympy/simplify/simplify.py
+@@ -251,8 +251,25 @@ def posify(eq):
+             eq[i] = e.subs(reps)
+         return f(eq), {r: s for s, r in reps.items()}
+ 
+-    reps = {s: Dummy(s.name, positive=True)
+-                 for s in eq.free_symbols if s.is_positive is None}
++    reps = {}
++    for s in eq.free_symbols:
++        if s.is_positive is None:
++            # Collect assumptions from the original symbol that are
++            # compatible with positive=True
++            # positive=True already sets: commutative, complex, hermitian,
++            # imaginary, negative, nonnegative, nonpositive, nonzero,
++            # positive, real, zero
++            # We preserve other assumptions like finite, integer, rational,
++            # prime, even, odd, etc.
++            assumptions = dict(s._assumptions)
++            # Remove assumptions that positive=True already sets
++            for key in ['commutative', 'complex', 'hermitian', 'imaginary',
++                        'negative', 'nonnegative', 'nonpositive', 'nonzero',
++                        'positive', 'real', 'zero']:
++                assumptions.pop(key, None)
++            # Add positive=True
++            assumptions['positive'] = True
++            reps[s] = Dummy(s.name, **assumptions)
+     eq = eq.subs(reps)
+     return eq, {r: s for s, r in reps.items()}
