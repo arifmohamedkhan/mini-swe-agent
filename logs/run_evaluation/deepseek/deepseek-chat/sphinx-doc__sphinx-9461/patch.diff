@@ -1,0 +1,70 @@
+diff --git a/sphinx/ext/autodoc/__init__.py b/sphinx/ext/autodoc/__init__.py
+index 1cecb1f79..e463eeb92 100644
+--- a/sphinx/ext/autodoc/__init__.py
++++ b/sphinx/ext/autodoc/__init__.py
+@@ -2676,6 +2676,19 @@ class PropertyDocumenter(DocstringStripSignatureMixin, ClassLevelDocumenter):  #
+         if inspect.isabstractmethod(self.object):
+             self.add_line('   :abstractmethod:', sourcename)
+ 
++        # Check if the property is wrapped in a classmethod
++        # (e.g., @classmethod @property)
++        if isinstance(self.parent, type):
++            dict_entry = self.parent.__dict__.get(self.object_name)
++            if dict_entry is None:
++                # Check the MRO for inherited classmethod-wrapped properties
++                for cls in self.parent.__mro__:
++                    if self.object_name in cls.__dict__:
++                        dict_entry = cls.__dict__[self.object_name]
++                        break
++            if isinstance(dict_entry, classmethod):
++                self.add_line('   :classmethod:', sourcename)
++
+         if safe_getattr(self.object, 'fget', None) and self.config.autodoc_typehints != 'none':
+             try:
+                 signature = inspect.signature(self.object.fget,
+diff --git a/sphinx/ext/autodoc/importer.py b/sphinx/ext/autodoc/importer.py
+index 1a8ea0973..b843751b1 100644
+--- a/sphinx/ext/autodoc/importer.py
++++ b/sphinx/ext/autodoc/importer.py
+@@ -116,6 +116,18 @@ def import_object(modname: str, objpath: List[str], objtype: str = '',
+                 # refs: https://github.com/sphinx-doc/sphinx/issues/9095
+                 logger.debug('[autodoc] => %r', (obj,))
+ 
++            # Handle classmethod-wrapped properties (e.g., @classmethod @property)
++            # In this case, getattr() returns the property value, but we need the
++            # property object itself for documentation.
++            if isinstance(parent, type):
++                # Check the MRO for the attribute
++                for cls in getmro(parent):
++                    if attrname in cls.__dict__:
++                        dict_entry = cls.__dict__[attrname]
++                        if isinstance(dict_entry, classmethod) and isinstance(dict_entry.__func__, property):
++                            obj = dict_entry.__func__
++                        break
++
+             object_name = attrname
+         return [module, parent, object_name, obj]
+     except (AttributeError, ImportError) as exc:
+@@ -278,6 +290,22 @@ def get_class_members(subject: Any, objpath: List[str], attrgetter: Callable
+             if ismock(value):
+                 value = undecorate(value)
+ 
++            # Handle classmethod-wrapped properties (e.g., @classmethod @property)
++            # In this case, getattr() returns the property value, but we need the
++            # property object itself for documentation.
++            if name in obj_dict:
++                dict_entry = obj_dict[name]
++                if isinstance(dict_entry, classmethod) and isinstance(dict_entry.__func__, property):
++                    value = dict_entry.__func__
++            else:
++                # Check if the member is inherited from a parent class
++                for cls in getmro(subject):
++                    if name in cls.__dict__:
++                        dict_entry = cls.__dict__[name]
++                        if isinstance(dict_entry, classmethod) and isinstance(dict_entry.__func__, property):
++                            value = dict_entry.__func__
++                        break
++
+             unmangled = unmangle(subject, name)
+             if unmangled and unmangled not in members:
+                 if name in obj_dict:
