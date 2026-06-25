@@ -1,0 +1,96 @@
+diff --git a/sphinx/builders/html/transforms.py b/sphinx/builders/html/transforms.py
+index c91da57e9..9af20c5cb 100644
+--- a/sphinx/builders/html/transforms.py
++++ b/sphinx/builders/html/transforms.py
+@@ -8,8 +8,7 @@
+     :license: BSD, see LICENSE for details.
+ """
+ 
+-import re
+-from typing import Any, Dict
++from typing import Any, Dict, List
+ 
+ from docutils import nodes
+ 
+@@ -37,26 +36,68 @@ class KeyboardTransform(SphinxPostTransform):
+     """
+     default_priority = 400
+     builders = ('html',)
+-    pattern = re.compile(r'(-|\+|\^|\s+)')
+ 
+     def run(self, **kwargs: Any) -> None:
+         matcher = NodeMatcher(nodes.literal, classes=["kbd"])
+         for node in self.document.traverse(matcher):  # type: nodes.literal
+-            parts = self.pattern.split(node[-1].astext())
+-            if len(parts) == 1:
++            text = node[-1].astext()
++
++            # Parse the text into keys and separators
++            parts = self._parse(text)
++
++            if len(parts) == 1 and parts[0][0] == 'key':
++                # Single key, no separators - nothing to transform
+                 continue
+ 
+             node.pop()
+-            while parts:
+-                key = parts.pop(0)
+-                node += nodes.literal('', key, classes=["kbd"])
+-
+-                try:
+-                    # key separator (ex. -, +, ^)
+-                    sep = parts.pop(0)
+-                    node += nodes.Text(sep)
+-                except IndexError:
+-                    pass
++            for part_type, part_value in parts:
++                if part_type == 'key':
++                    node += nodes.literal('', part_value, classes=["kbd"])
++                else:
++                    node += nodes.Text(part_value)
++
++    def _parse(self, text: str) -> List:
++        """Parse keyboard shortcut text into keys and separators.
++
++        Returns a list of (type, value) tuples where type is 'key' or 'sep'.
++        """
++        separators = set('-+^')
++        result = []
++        current_key = []
++
++        i = 0
++        while i < len(text):
++            ch = text[i]
++            if ch in separators:
++                if current_key:
++                    # We have accumulated a key before this separator,
++                    # so it's a real separator
++                    result.append(('key', ''.join(current_key)))
++                    result.append(('sep', ch))
++                    current_key = []
++                else:
++                    # No key before this separator, so it's part of a key
++                    current_key.append(ch)
++            elif ch.isspace():
++                if current_key:
++                    result.append(('key', ''.join(current_key)))
++                    current_key = []
++                # Collect all consecutive whitespace as a single separator
++                ws = ch
++                i += 1
++                while i < len(text) and text[i].isspace():
++                    ws += text[i]
++                    i += 1
++                result.append(('sep', ws))
++                continue  # skip the i += 1 at the end
++            else:
++                current_key.append(ch)
++            i += 1
++
++        if current_key:
++            result.append(('key', ''.join(current_key)))
++
++        return result
+ 
+ 
+ def setup(app: Sphinx) -> Dict[str, Any]:

@@ -1,0 +1,44 @@
+diff --git a/sphinx/ext/autodoc/__init__.py b/sphinx/ext/autodoc/__init__.py
+index ddfd2b365..76863f32e 100644
+--- a/sphinx/ext/autodoc/__init__.py
++++ b/sphinx/ext/autodoc/__init__.py
+@@ -606,6 +606,18 @@ class Documenter:
+ 
+                     for i, line in enumerate(self.process_doc(docstrings)):
+                         self.add_line(line, sourcename, i)
++                elif inspect.isclass(self.parent):
++                    # try to find the attribute documentation in base classes
++                    for cls in self.parent.__mro__:
++                        if cls is self.parent:
++                            continue
++                        key = (cls.__qualname__, self.objpath[-1])
++                        if key in attr_docs:
++                            no_docstring = True
++                            docstrings = [list(attr_docs[key])]
++                            for i, line in enumerate(self.process_doc(docstrings)):
++                                self.add_line(line, sourcename, i)
++                            break
+ 
+         # add content from docstrings
+         if not no_docstring:
+@@ -756,6 +768,20 @@ class Documenter:
+                     # keep documented attributes
+                     keep = True
+                 isattr = True
++            elif ((namespace, membername) not in attr_docs and
++                  inspect.isclass(self.parent) and
++                  any((cls.__qualname__, membername) in attr_docs
++                      for cls in self.parent.__mro__
++                      if cls is not self.parent)):
++                if want_all and isprivate:
++                    if self.options.private_members is None:
++                        keep = False
++                    else:
++                        keep = membername in self.options.private_members
++                else:
++                    # keep documented attributes
++                    keep = True
++                isattr = True
+             elif want_all and isprivate:
+                 if has_doc or self.options.undoc_members:
+                     if self.options.private_members is None:
