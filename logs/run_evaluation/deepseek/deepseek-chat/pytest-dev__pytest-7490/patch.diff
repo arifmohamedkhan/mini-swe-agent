@@ -1,0 +1,33 @@
+diff --git a/src/_pytest/assertion/rewrite.py b/src/_pytest/assertion/rewrite.py
+index e77b1b0b8..076cc3ca3 100644
+--- a/src/_pytest/assertion/rewrite.py
++++ b/src/_pytest/assertion/rewrite.py
+@@ -677,6 +677,11 @@ class AssertionRewriter(ast.NodeVisitor):
+             ast.alias("builtins", "@py_builtins"),
+             ast.alias("_pytest.assertion.rewrite", "@pytest_ar"),
+         ]
++        # Python 3.11+ requires lineno and col_offset on alias nodes
++        if sys.version_info >= (3, 11):
++            for alias in aliases:
++                alias.lineno = 1
++                alias.col_offset = 0
+         doc = getattr(mod, "docstring", None)
+         expect_docstring = doc is None
+         if doc is not None and self.is_rewrite_disabled(doc):
+diff --git a/src/_pytest/skipping.py b/src/_pytest/skipping.py
+index 335e10996..0d54db56d 100644
+--- a/src/_pytest/skipping.py
++++ b/src/_pytest/skipping.py
+@@ -262,6 +262,12 @@ def pytest_runtest_makereport(item: Item, call: CallInfo[None]):
+     outcome = yield
+     rep = outcome.get_result()
+     xfailed = item._store.get(xfailed_key, None)
++    # Dynamically added xfail markers need to be evaluated during the call phase
++    # to pick up markers added by the test function itself (e.g. via request.node.add_marker).
++    if xfailed is None and call.when == "call" and not item.config.option.runxfail:
++        xfailed = evaluate_xfail_marks(item)
++        if xfailed is not None:
++            item._store[xfailed_key] = xfailed
+     # unittest special case, see setting of unexpectedsuccess_key
+     if unexpectedsuccess_key in item._store and rep.when == "call":
+         reason = item._store[unexpectedsuccess_key]
