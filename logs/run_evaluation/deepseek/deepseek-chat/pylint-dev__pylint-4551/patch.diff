@@ -1,0 +1,51 @@
+diff --git a/pylint/pyreverse/inspector.py b/pylint/pyreverse/inspector.py
+index 8fa12202..4e6f247f 100644
+--- a/pylint/pyreverse/inspector.py
++++ b/pylint/pyreverse/inspector.py
+@@ -236,6 +236,47 @@ class Linker(IdGeneratorMixIn, utils.LocalsVisitor):
+         except astroid.InferenceError:
+             pass
+ 
++        # Also consider type annotations from function parameters
++        assign_node = getattr(node, "parent", None)
++        if assign_node is not None and hasattr(assign_node, "value"):
++            value = assign_node.value
++            if isinstance(value, astroid.Name):
++                name = value.name
++                frame = node.frame()
++                if hasattr(frame, "args"):
++                    for i, arg in enumerate(frame.args.args):
++                        if arg.name == name:
++                            ann = (
++                                frame.args.annotations[i]
++                                if i < len(frame.args.annotations)
++                                else None
++                            )
++                            if ann is not None:
++                                try:
++                                    ann_values = set(ann.infer())
++                                    current = set(
++                                        parent.instance_attrs_type[node.attrname]
++                                    )
++                                    parent.instance_attrs_type[node.attrname] = list(
++                                        current | ann_values
++                                    )
++                                except astroid.InferenceError:
++                                    pass
++                                break
++
++        # Also consider type annotations from AnnAssign nodes
++        if assign_node is not None and hasattr(assign_node, "annotation"):
++            ann = assign_node.annotation
++            if ann is not None:
++                try:
++                    ann_values = set(ann.infer())
++                    current = set(parent.instance_attrs_type[node.attrname])
++                    parent.instance_attrs_type[node.attrname] = list(
++                        current | ann_values
++                    )
++                except astroid.InferenceError:
++                    pass
++
+     def visit_import(self, node):
+         """visit an astroid.Import node
