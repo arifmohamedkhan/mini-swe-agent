@@ -1,0 +1,40 @@
+diff --git a/django/db/migrations/serializer.py b/django/db/migrations/serializer.py
+index 7d226955d5..cf8b91a372 100644
+--- a/django/db/migrations/serializer.py
++++ b/django/db/migrations/serializer.py
+@@ -1,4 +1,5 @@
+ import builtins
++import importlib
+ import collections.abc
+ import datetime
+ import decimal
+@@ -97,6 +98,19 @@ class DeconstructableSerializer(BaseSerializer):
+         else:
+             imports = {"import %s" % module}
+             name = path
++            # If the module is not importable (e.g., the path contains an
++            # inner class), find the actual module by trying progressively
++            # shorter paths.
++            if module:
++                parts = module.split(".")
++                for i in range(len(parts), 0, -1):
++                    candidate = ".".join(parts[:i])
++                    try:
++                        importlib.import_module(candidate)
++                        imports = {"import %s" % candidate}
++                        break
++                    except ImportError:
++                        continue
+         return name, imports
+ 
+     def serialize(self):
+@@ -267,8 +281,10 @@ class TypeSerializer(BaseSerializer):
+         if hasattr(self.value, "__module__"):
+             module = self.value.__module__
+             if module == builtins.__name__:
+-                return self.value.__name__, set()
++                return self.value.__qualname__, set()
+             else:
++                if "<" not in self.value.__qualname__:  # Qualname can include <locals>
++                    return "%s.%s" % (module, self.value.__qualname__), {"import %s" % module}
+                 return "%s.%s" % (module, self.value.__name__), {"import %s" % module}
