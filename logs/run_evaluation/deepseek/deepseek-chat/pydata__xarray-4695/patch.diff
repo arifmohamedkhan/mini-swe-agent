@@ -1,0 +1,70 @@
+diff --git a/xarray/core/computation.py b/xarray/core/computation.py
+index c332ecb0..06c63b02 100644
+--- a/xarray/core/computation.py
++++ b/xarray/core/computation.py
+@@ -452,7 +452,7 @@ def _iter_over_selections(obj, dim, values):
+     dummy = None
+     for value in values:
+         try:
+-            obj_sel = obj.sel(**{dim: value})
++            obj_sel = obj.sel({dim: value})
+         except (KeyError, IndexError):
+             if dummy is None:
+                 dummy = _dummy_copy(obj)
+diff --git a/xarray/core/dataarray.py b/xarray/core/dataarray.py
+index 32b24ef1..7b98c9aa 100644
+--- a/xarray/core/dataarray.py
++++ b/xarray/core/dataarray.py
+@@ -196,7 +196,7 @@ class _LocIndexer:
+             # expand the indexer so we can handle Ellipsis
+             labels = indexing.expanded_indexer(key, self.data_array.ndim)
+             key = dict(zip(self.data_array.dims, labels))
+-        return self.data_array.sel(**key)
++        return self.data_array.sel(indexers=key)
+ 
+     def __setitem__(self, key, value) -> None:
+         if not utils.is_dict_like(key):
+diff --git a/xarray/core/groupby.py b/xarray/core/groupby.py
+index e1e5a0fa..ea3f96f5 100644
+--- a/xarray/core/groupby.py
++++ b/xarray/core/groupby.py
+@@ -481,7 +481,7 @@ class GroupBy(SupportsArithmetic):
+ 
+         for group_value, obj in self:
+             try:
+-                other_sel = other.sel(**{self._group.name: group_value})
++                other_sel = other.sel({self._group.name: group_value})
+             except AttributeError:
+                 raise TypeError(
+                     "GroupBy objects only support binary ops "
+diff --git a/xarray/core/indexing.py b/xarray/core/indexing.py
+index 843feb04..e274a929 100644
+--- a/xarray/core/indexing.py
++++ b/xarray/core/indexing.py
+@@ -188,7 +188,10 @@ def convert_label_indexer(index, label, index_name="", method=None, tolerance=No
+                     )
+                 indexer = index.get_loc(label_value)
+             else:
+-                indexer = index.get_loc(label_value, method=method, tolerance=tolerance)
++                if method is None and tolerance is None:
++                    indexer = index.get_loc(label_value)
++                else:
++                    indexer = index.get_indexer([label_value], method=method, tolerance=tolerance)[0]
+         elif label.dtype.kind == "b":
+             indexer = label
+         else:
+diff --git a/xarray/core/missing.py b/xarray/core/missing.py
+index f608468e..8114d580 100644
+--- a/xarray/core/missing.py
++++ b/xarray/core/missing.py
+@@ -560,8 +560,8 @@ def _localize(var, indexes_coords):
+             minval = np.nanmin(new_x.values)
+             maxval = np.nanmax(new_x.values)
+         index = x.to_index()
+-        imin = index.get_loc(minval, method="nearest")
+-        imax = index.get_loc(maxval, method="nearest")
++        imin = index.get_indexer([minval], method="nearest")[0]
++        imax = index.get_indexer([maxval], method="nearest")[0]
+ 
+         indexes[dim] = slice(max(imin - 2, 0), imax + 2)
+         indexes_coords[dim] = (x[indexes[dim]], new_x)
