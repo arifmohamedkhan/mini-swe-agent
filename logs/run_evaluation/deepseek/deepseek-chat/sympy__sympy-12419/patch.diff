@@ -1,0 +1,68 @@
+diff --git a/sympy/concrete/summations.py b/sympy/concrete/summations.py
+index 372487664..ed3782faf 100644
+--- a/sympy/concrete/summations.py
++++ b/sympy/concrete/summations.py
+@@ -846,6 +846,7 @@ def telescopic(L, R, limits):
+ def eval_sum(f, limits):
+     from sympy.concrete.delta import deltasummation, _has_simple_delta
+     from sympy.functions import KroneckerDelta
++    from sympy.simplify import simplify
+ 
+     (i, a, b) = limits
+     if f is S.Zero:
+@@ -866,6 +867,38 @@ def eval_sum(f, limits):
+                     return None
+                 newargs.append((newexpr, arg.cond))
+             return f.func(*newargs)
++        # If conditions depend on the summation variable, try to check if
++        # they are implied by the summation range.
++        # This handles cases like Sum(Piecewise((1, (0 <= j) & (j <= n-1)), (0, True)), (j, 0, n-1))
++        newargs = []
++        for expr, cond in f.args:
++            if cond == True:
++                newexpr = eval_sum(expr, limits)
++                if newexpr is not None:
++                    newargs.append((newexpr, cond))
++            else:
++                # Check if the condition is implied by the range
++                range_cond = (i >= a) & (i <= b)
++                from sympy.logic.boolalg import Implies
++                implied = simplify(Implies(range_cond, cond))
++                if implied == True:
++                    # Condition is always True within the range
++                    # Just evaluate the sum of the expression directly
++                    newexpr = eval_sum(expr, limits)
++                    if newexpr is not None:
++                        return newexpr
++                else:
++                    # Check if the condition is never True within the range
++                    never = simplify(Implies(range_cond, ~cond))
++                    if never == True:
++                        # Condition is never True, skip this branch
++                        pass
++                    else:
++                        # Can't determine, keep the original
++                        return None
++        if newargs:
++            return f.func(*newargs)
++        return S.Zero
+ 
+     if f.has(KroneckerDelta) and _has_simple_delta(f, limits[0]):
+         return deltasummation(f, limits)
+diff --git a/sympy/matrices/expressions/matexpr.py b/sympy/matrices/expressions/matexpr.py
+index b4d759836..72f146030 100644
+--- a/sympy/matrices/expressions/matexpr.py
++++ b/sympy/matrices/expressions/matexpr.py
+@@ -476,10 +476,8 @@ def conjugate(self):
+         return self
+ 
+     def _entry(self, i, j):
+-        if i == j:
+-            return S.One
+-        else:
+-            return S.Zero
++        from sympy.functions import KroneckerDelta
++        return KroneckerDelta(i, j)
+ 
+     def _eval_determinant(self):
+         return S.One
