@@ -1,0 +1,46 @@
+diff --git a/sphinx/util/docfields.py b/sphinx/util/docfields.py
+index 3a3367ebe..5bd0db24d 100644
+--- a/sphinx/util/docfields.py
++++ b/sphinx/util/docfields.py
+@@ -35,6 +35,22 @@ def _is_single_paragraph(node: nodes.field_body) -> bool:
+     return False
+ 
+ 
++def _split_field_arg(fieldarg: str) -> Tuple[str, str]:
++    """Split a field argument into type and name parts.
++
++    Handles types with parentheses like dict(str, str) correctly.
++    """
++    depth = 0
++    for i, c in enumerate(fieldarg):
++        if c in '([{':
++            depth += 1
++        elif c in ')]}':
++            depth -= 1
++        elif c == ' ' and depth == 0:
++            return fieldarg[:i], fieldarg[i + 1:]
++    return fieldarg, ""
++
++
+ class Field:
+     """A doc field that is never grouped.  It can have an argument or not, the
+     argument can be linked using a specified *rolename*.  Field should be used
+@@ -298,13 +314,14 @@ class DocFieldTransformer:
+             # also support syntax like ``:param type name:``
+             if typedesc.is_typed:
+                 try:
+-                    argtype, argname = fieldarg.split(None, 1)
++                    argtype, argname = _split_field_arg(fieldarg)
+                 except ValueError:
+                     pass
+                 else:
+-                    types.setdefault(typename, {})[argname] = \
+-                        [nodes.Text(argtype)]
+-                    fieldarg = argname
++                    if argname:
++                        types.setdefault(typename, {})[argname] = \
++                            [nodes.Text(argtype)]
++                        fieldarg = argname
+ 
+             translatable_content = nodes.inline(field_body.rawsource,
+                                                 translatable=True)
