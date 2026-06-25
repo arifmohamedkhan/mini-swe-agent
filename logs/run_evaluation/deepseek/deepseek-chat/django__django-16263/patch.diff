@@ -1,0 +1,70 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index 9735ce10c8..45fd548422 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -550,9 +550,66 @@ class Query(BaseExpression):
+         Perform a COUNT() query using the current filter constraints.
+         """
+         obj = self.clone()
++        # Only include annotations that are referenced by filters, other
++        # annotations, or ordering. This avoids unnecessary joins and
++        # group by clauses in the count query.
++        if obj.annotations:
++            unreferenced = obj._get_unreferenced_annotations()
++            if unreferenced:
++                # Remove unreferenced annotations from the annotation
++                # select mask so they are not included in the SELECT
++                # clause. Keep them in the annotations dict to preserve
++                # the query structure (JOINs, GROUP BY).
++                if obj.annotation_select_mask is not None:
++                    obj.set_annotation_mask(
++                        obj.annotation_select_mask - unreferenced
++                    )
++                else:
++                    obj.set_annotation_mask(
++                        set(obj.annotations.keys()) - unreferenced
++                    )
+         obj.add_annotation(Count("*"), alias="__count", is_summary=True)
+         return obj.get_aggregation(using, ["__count"])["__count"]
+ 
++    def _get_unreferenced_annotations(self):
++        """
++        Return a set of annotation aliases that are not referenced by
++        filters, other annotations, or ordering.
++        """
++        referenced = set()
++        for alias, annotation in self.annotations.items():
++            for other_alias, other_annotation in self.annotations.items():
++                if alias != other_alias and self._expression_references(
++                    other_annotation, annotation
++                ):
++                    referenced.add(alias)
++        for child in self.where.children:
++            for alias, annotation in self.annotations.items():
++                if self._expression_references(child, annotation):
++                    referenced.add(alias)
++        for item in self.order_by:
++            if isinstance(item, str):
++                name = item.lstrip("-")
++                if name in self.annotations:
++                    referenced.add(name)
++            elif hasattr(item, "get_source_expressions"):
++                for alias, annotation in self.annotations.items():
++                    if self._expression_references(item, annotation):
++                        referenced.add(alias)
++        return set(self.annotations.keys()) - referenced
++
++    @staticmethod
++    def _expression_references(expr, target):
++        """Return True if expr references target by identity comparison."""
++        if expr is target:
++            return True
++        if hasattr(expr, "get_source_expressions"):
++            return any(
++                Query._expression_references(se, target)
++                for se in expr.get_source_expressions()
++            )
++        return False
++
+     def has_filters(self):
+         return self.where
