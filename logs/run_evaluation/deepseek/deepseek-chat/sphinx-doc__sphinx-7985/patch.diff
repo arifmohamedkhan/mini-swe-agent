@@ -1,0 +1,31 @@
+diff --git a/sphinx/builders/linkcheck.py b/sphinx/builders/linkcheck.py
+index dd5317087..51ecc6791 100644
+--- a/sphinx/builders/linkcheck.py
++++ b/sphinx/builders/linkcheck.py
+@@ -213,7 +213,25 @@ class CheckExternalLinksBuilder(Builder):
+             if len(uri) == 0 or uri.startswith(('#', 'mailto:', 'ftp:')):
+                 return 'unchecked', '', 0
+             elif not uri.startswith(('http:', 'https:')):
+-                return 'local', '', 0
++                # Check local link
++                # Split off anchor
++                if '#' in uri:
++                    req_url, anchor = uri.split('#', 1)
++                else:
++                    req_url = uri
++                    anchor = None
++                # Check if the referenced document exists
++                docname = req_url
++                # Try to find the document by checking with source suffixes
++                found = False
++                for suffix in self.config.source_suffix:
++                    if path.isfile(path.join(self.env.srcdir, docname + suffix)):
++                        found = True
++                        break
++                if found:
++                    return 'working', '', 0
++                else:
++                    return 'broken', __('local link %r not found') % req_url, 0
+             elif uri in self.good:
+                 return 'working', 'old', 0
+             elif uri in self.broken:
