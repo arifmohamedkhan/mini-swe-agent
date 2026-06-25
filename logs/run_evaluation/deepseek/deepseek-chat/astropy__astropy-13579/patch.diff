@@ -1,0 +1,32 @@
+diff --git a/astropy/wcs/wcsapi/wrappers/sliced_wcs.py b/astropy/wcs/wcsapi/wrappers/sliced_wcs.py
+index d7605b078..8ba671188 100644
+--- a/astropy/wcs/wcsapi/wrappers/sliced_wcs.py
++++ b/astropy/wcs/wcsapi/wrappers/sliced_wcs.py
+@@ -253,6 +253,28 @@ class SlicedLowLevelWCS(BaseWCSWrapper):
+             else:
+                 world_arrays_new.append(1.)
+ 
++        # If there are any dropped world dimensions, we need to compute the
++        # correct world values for them instead of using the placeholder 1.
++        # The dropped world dimensions depend only on sliced pixel dimensions,
++        # so we can compute their world values by calling pixel_to_world_values
++        # on the underlying WCS with the pixel slice values.
++        if len(self._world_keep) < self._wcs.world_n_dim:
++            pixel_arrays_for_dropped = []
++            for ipix in range(self._wcs.pixel_n_dim):
++                if isinstance(self._slices_pixel[ipix], numbers.Integral):
++                    pixel_arrays_for_dropped.append(self._slices_pixel[ipix])
++                else:
++                    pixel_arrays_for_dropped.append(0.)
++            world_vals_all = self._wcs.pixel_to_world_values(*pixel_arrays_for_dropped)
++            if self._wcs.world_n_dim > 1:
++                for iworld in range(self._wcs.world_n_dim):
++                    if iworld not in self._world_keep:
++                        world_arrays_new[iworld] = world_vals_all[iworld]
++            else:
++                for iworld in range(self._wcs.world_n_dim):
++                    if iworld not in self._world_keep:
++                        world_arrays_new[iworld] = world_vals_all
++
+         world_arrays_new = np.broadcast_arrays(*world_arrays_new)
+         pixel_arrays = list(self._wcs.world_to_pixel_values(*world_arrays_new))
