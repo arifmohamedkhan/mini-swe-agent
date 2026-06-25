@@ -1,0 +1,41 @@
+diff --git a/django/db/backends/sqlite3/base.py b/django/db/backends/sqlite3/base.py
+index 31e8a55a43..efa275aae3 100644
+--- a/django/db/backends/sqlite3/base.py
++++ b/django/db/backends/sqlite3/base.py
+@@ -561,6 +561,8 @@ def _sqlite_format_dtdelta(conn, lhs, rhs):
+         return None
+     # typecast_timestamp returns a date or a datetime without timezone.
+     # It will be formatted as "%Y-%m-%d" or "%Y-%m-%d %H:%M:%S[.%f]"
++    if isinstance(out, datetime.timedelta):
++        return duration_microseconds(out)
+     return str(out)
+ 
+ 
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+index a156c5e881..990e43b9a4 100644
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -479,7 +479,23 @@ class CombinedExpression(SQLiteNumericMixin, Expression):
+ 
+ 
+ class DurationExpression(CombinedExpression):
++    def _is_duration(self, side):
++        if isinstance(side, DurationValue):
++            return True
++        try:
++            output = side.output_field
++        except (FieldError, AttributeError):
++            return False
++        return output.get_internal_type() == 'DurationField'
++
+     def compile(self, side, compiler, connection):
++        if self._is_duration(self.lhs) and self._is_duration(self.rhs):
++            # Both sides are durations, compile without special wrapping
++            if isinstance(side, DurationValue):
++                # Return just the microseconds value
++                from django.utils.duration import duration_microseconds
++                return str(duration_microseconds(side.value)), []
++            return compiler.compile(side)
+         if not isinstance(side, DurationValue):
+             try:
+                 output = side.output_field
