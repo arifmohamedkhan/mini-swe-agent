@@ -1,0 +1,30 @@
+diff --git a/django/db/backends/postgresql/operations.py b/django/db/backends/postgresql/operations.py
+index 8d19872bea..20e12c995b 100644
+--- a/django/db/backends/postgresql/operations.py
++++ b/django/db/backends/postgresql/operations.py
+@@ -44,10 +44,21 @@ class DatabaseOperations(BaseDatabaseOperations):
+         return "DATE_TRUNC('%s', %s)" % (lookup_type, field_name)
+ 
+     def _prepare_tzname_delta(self, tzname):
+-        if '+' in tzname:
+-            return tzname.replace('+', '-')
+-        elif '-' in tzname:
+-            return tzname.replace('-', '+')
++        # Only swap sign for offset-only timezone names
++        if len(tzname) >= 2 and tzname[0] in ('+', '-'):
++            rest = tzname[1:]
++            if ':' in rest:
++                parts = rest.split(':')
++                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
++                    if tzname[0] == '+':
++                        return '-' + rest
++                    else:
++                        return '+' + rest
++            elif rest.isdigit():
++                if tzname[0] == '+':
++                    return '-' + rest
++                else:
++                    return '+' + rest
+         return tzname
+ 
+     def _convert_field_to_tz(self, field_name, tzname):

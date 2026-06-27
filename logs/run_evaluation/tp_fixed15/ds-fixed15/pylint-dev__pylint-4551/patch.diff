@@ -1,0 +1,35 @@
+diff --git a/pylint/pyreverse/inspector.py b/pylint/pyreverse/inspector.py
+index 8fa12202..c0c79a5a 100644
+--- a/pylint/pyreverse/inspector.py
++++ b/pylint/pyreverse/inspector.py
+@@ -235,6 +235,30 @@ class Linker(IdGeneratorMixIn, utils.LocalsVisitor):
+             parent.instance_attrs_type[node.attrname] = list(current | values)
+         except astroid.InferenceError:
+             pass
++        try:
++            # If the assigned value is a Name node, check if it refers to a
++            # function parameter with a type annotation, and if so, add the
++            # annotated type to the instance_attrs_type.
++            assign = node.parent
++            if isinstance(assign, astroid.Assign):
++                value = assign.value
++                if isinstance(value, astroid.Name):
++                    name = value.name
++                    scope = assign.scope()
++                    if isinstance(scope, astroid.FunctionDef):
++                        for i, arg in enumerate(scope.args.args):
++                            if arg.name == name:
++                                if i < len(scope.args.annotations) and scope.args.annotations[i]:
++                                    ann = scope.args.annotations[i]
++                                    try:
++                                        inferred = set(ann.infer())
++                                        current = set(parent.instance_attrs_type[node.attrname])
++                                        parent.instance_attrs_type[node.attrname] = list(current | inferred)
++                                    except astroid.InferenceError:
++                                        pass
++                                break
++        except Exception:
++            pass
+ 
+     def visit_import(self, node):
+         """visit an astroid.Import node
