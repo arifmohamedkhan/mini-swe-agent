@@ -1,0 +1,103 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index 9735ce10c8..1b4708efc6 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -550,9 +550,99 @@ class Query(BaseExpression):
+         Perform a COUNT() query using the current filter constraints.
+         """
+         obj = self.clone()
++        # Only include annotations that are referenced by filters, ordering,
++        # or other annotations to avoid unnecessary joins and grouping.
++        if obj.annotations:
++            # Find annotations that are referenced by filters, ordering,
++            # or other annotations.
++            referenced_annotations = self._get_referenced_annotations()
++            # Remove annotations that are not referenced.
++            for alias in list(obj.annotations):
++                if alias not in referenced_annotations:
++                    obj.annotations.pop(alias)
++                    if obj.annotation_select_mask is not None:
++                        obj.annotation_select_mask.discard(alias)
++            obj._annotation_select_cache = None
++            # Build a set of aliases that are still referenced by the
++            # remaining annotations and the WHERE clause.
++            needed_aliases = set()
++            for annotation in obj.annotations.values():
++                for col in obj._gen_cols([annotation]):
++                    needed_aliases.add(col.alias)
++            if obj.where:
++                for col in obj._gen_cols([obj.where]):
++                    needed_aliases.add(col.alias)
++            # Decrement refcounts for aliases that are no longer needed.
++            for alias in list(obj.alias_refcount):
++                if alias not in needed_aliases:
++                    obj.unref_alias(alias, obj.alias_refcount[alias])
+         obj.add_annotation(Count("*"), alias="__count", is_summary=True)
+         return obj.get_aggregation(using, ["__count"])["__count"]
+ 
++    def _get_referenced_annotations(self):
++        """
++        Return a set of annotation aliases that are referenced by filters,
++        ordering, or other annotations.
++        """
++        if not self.annotations:
++            return set()
++
++        # Collect all sub-expressions from an expression tree.
++        def _get_all_refs(expr):
++            refs = [expr]
++            if hasattr(expr, 'get_source_expressions'):
++                for se in expr.get_source_expressions():
++                    if se is not None:
++                        refs.extend(_get_all_refs(se))
++            return refs
++
++        # Build a mapping of which annotations reference which other annotations.
++        annotation_refs = {}
++        for alias, annotation in self.annotations.items():
++            refs = set()
++            for expr in _get_all_refs(annotation):
++                for other_alias, other_annotation in self.annotations.items():
++                    if expr is other_annotation and alias != other_alias:
++                        refs.add(other_alias)
++            annotation_refs[alias] = refs
++
++        # Find annotations directly referenced by the WHERE clause.
++        where_refs = set()
++        if self.where:
++            for expr in _get_all_refs(self.where):
++                for alias, annotation in self.annotations.items():
++                    if expr is annotation:
++                        where_refs.add(alias)
++
++        # Find annotations directly referenced by ORDER BY.
++        order_refs = set()
++        for item in self.order_by:
++            if isinstance(item, str):
++                stripped = item.lstrip('-')
++                if stripped in self.annotations:
++                    order_refs.add(stripped)
++            elif hasattr(item, 'get_source_expressions'):
++                for expr in _get_all_refs(item):
++                    for alias, annotation in self.annotations.items():
++                        if expr is annotation:
++                            order_refs.add(alias)
++
++        # Start with annotations referenced by WHERE or ORDER BY.
++        used = set(where_refs | order_refs)
++
++        # Transitively add annotations that are referenced by used annotations.
++        changed = True
++        while changed:
++            changed = False
++            for alias, refs in annotation_refs.items():
++                if alias in used:
++                    for ref in refs:
++                        if ref not in used:
++                            used.add(ref)
++                            changed = True
++
++        return used
++
+     def has_filters(self):
+         return self.where
