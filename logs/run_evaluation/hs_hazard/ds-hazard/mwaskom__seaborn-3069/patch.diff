@@ -1,0 +1,78 @@
+diff --git a/seaborn/_core/plot.py b/seaborn/_core/plot.py
+index 4f0290a4..50bc0526 100644
+--- a/seaborn/_core/plot.py
++++ b/seaborn/_core/plot.py
+@@ -13,6 +13,7 @@ from collections import abc
+ from collections.abc import Callable, Generator
+ from typing import Any, List, Optional, cast
+ 
++import numpy as np
+ from cycler import cycler
+ import pandas as pd
+ from pandas import DataFrame, Series, Index
+@@ -1475,21 +1476,23 @@ class Plotter:
+ 
+                 axes_df = self._filter_subplot_data(df, view)
+ 
+-                with pd.option_context("mode.use_inf_as_null", True):
+-                    if keep_na:
+-                        # The simpler thing to do would be x.dropna().reindex(x.index).
+-                        # But that doesn't work with the way that the subset iteration
+-                        # is written below, which assumes data for grouping vars.
+-                        # Matplotlib (usually?) masks nan data, so this should "work".
+-                        # Downstream code can also drop these rows, at some speed cost.
+-                        present = axes_df.notna().all(axis=1)
+-                        nulled = {}
+-                        for axis in "xy":
+-                            if axis in axes_df:
+-                                nulled[axis] = axes_df[axis].where(present)
+-                        axes_df = axes_df.assign(**nulled)
+-                    else:
+-                        axes_df = axes_df.dropna()
++                # Replace inf values with NaN for consistent handling
++                # (use_inf_as_null was removed in pandas 3.0)
++                axes_df = axes_df.replace([np.inf, -np.inf], np.nan)
++                if keep_na:
++                    # The simpler thing to do would be x.dropna().reindex(x.index).
++                    # But that doesn't work with the way that the subset iteration
++                    # is written below, which assumes data for grouping vars.
++                    # Matplotlib (usually?) masks nan data, so this should "work".
++                    # Downstream code can also drop these rows, at some speed cost.
++                    present = axes_df.notna().all(axis=1)
++                    nulled = {}
++                    for axis in "xy":
++                        if axis in axes_df:
++                            nulled[axis] = axes_df[axis].where(present)
++                    axes_df = axes_df.assign(**nulled)
++                else:
++                    axes_df = axes_df.dropna()
+ 
+                 subplot_keys = {}
+                 for dim in ["col", "row"]:
+@@ -1632,7 +1635,25 @@ class Plotter:
+             for axis in "xy":
+                 axis_key = sub[axis]
+ 
+-                # Axis limits
++                # Nominal scale adjustments
++                from seaborn._core.scales import Nominal
++                scale = self._scales.get(axis_key)
++                if isinstance(scale, Nominal):
++                    # 1. Set limits to +/- 0.5 from first/last tick
++                    # (but only if the user hasn't explicitly set limits)
++                    if axis_key not in p._limits:
++                        n = len(getattr(ax, f"get_{axis}ticks")())
++                        if n > 0:
++                            if axis == "x":
++                                ax.set_xlim(-0.5, n - 0.5, auto=None)
++                            else:
++                                # 3. Invert y axis for nominal scales
++                                ax.set_ylim(n - 0.5, -0.5, auto=None)
++
++                    # 2. Turn off grid for nominal axes
++                    getattr(ax, f"{axis}axis").grid(False)
++
++                # Axis limits (after nominal adjustments, so explicit limits override)
+                 if axis_key in p._limits:
+                     convert_units = getattr(ax, f"{axis}axis").convert_units
+                     a, b = p._limits[axis_key]
