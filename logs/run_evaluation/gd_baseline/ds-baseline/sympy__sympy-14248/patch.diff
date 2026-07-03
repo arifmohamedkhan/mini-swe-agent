@@ -1,0 +1,204 @@
+diff --git a/sympy/core/function.py b/sympy/core/function.py
+index 3f7374fe6..005e5b393 100644
+--- a/sympy/core/function.py
++++ b/sympy/core/function.py
+@@ -81,6 +81,8 @@ def _coeff_isneg(a):
+ 
+     if a.is_Mul:
+         a = a.args[0]
++    elif a.is_MatMul:
++        a = a.args[0]
+     return a.is_Number and a.is_negative
+ 
+ 
+diff --git a/sympy/printing/latex.py b/sympy/printing/latex.py
+index 8253b2f68..1653d919c 100644
+--- a/sympy/printing/latex.py
++++ b/sympy/printing/latex.py
+@@ -1477,18 +1477,51 @@ def _print_Adjoint(self, expr):
+             return r"%s^\dagger" % self._print(mat)
+ 
+     def _print_MatAdd(self, expr):
++        from sympy.core.function import _coeff_isneg
++        from sympy import MatMul
+         terms = list(expr.args)
+-        tex = " + ".join(map(self._print, terms))
++        tex = ""
++        for i, term in enumerate(terms):
++            if i == 0:
++                pass
++            elif _coeff_isneg(term):
++                tex += " - "
++                if isinstance(term, MatMul):
++                    coeff, matrices = term.as_coeff_matrices()
++                    if coeff == -1:
++                        if len(matrices) == 1:
++                            term = matrices[0]
++                        else:
++                            term = MatMul(*matrices)
++                    else:
++                        term = MatMul(-coeff, *matrices)
++                else:
++                    term = -term
++            else:
++                tex += " + "
++            term_tex = self._print(term)
++            if self._needs_add_brackets(term):
++                term_tex = "\\left(%s\\right)" % term_tex
++            tex += term_tex
+         return tex
+ 
+     def _print_MatMul(self, expr):
+-        from sympy import Add, MatAdd, HadamardProduct
++        from sympy import Add, MatAdd, HadamardProduct, MatMul
++        from sympy.core.function import _coeff_isneg
++
++        # Handle negative coefficient like _print_Mul does
++        coeff, matrices = expr.as_coeff_matrices()
++        if coeff == -1:
++            expr = MatMul(*matrices)
++            sign = "-"
++        else:
++            sign = ""
+ 
+         def parens(x):
+             if isinstance(x, (Add, MatAdd, HadamardProduct)):
+                 return r"\left(%s\right)" % self._print(x)
+             return self._print(x)
+-        return ' '.join(map(parens, expr.args))
++        return sign + ' '.join(map(parens, expr.args))
+ 
+     def _print_Mod(self, expr, exp=None):
+         if exp is not None:
+diff --git a/sympy/printing/pretty/pretty.py b/sympy/printing/pretty/pretty.py
+index db24f4c61..390bd0263 100644
+--- a/sympy/printing/pretty/pretty.py
++++ b/sympy/printing/pretty/pretty.py
+@@ -819,11 +819,62 @@ def _print_BlockMatrix(self, B):
+         return self._print(B.blocks)
+ 
+     def _print_MatAdd(self, expr):
+-        return self._print_seq(expr.args, None, None, ' + ')
++        from sympy.core.function import _coeff_isneg
++        from sympy import MatMul
++        terms = list(expr.args)
++        pforms, indices = [], []
++
++        def pretty_negative(pform, index):
++            """Prepend a minus sign to a pretty form. """
++            if index == 0:
++                if pform.height() > 1:
++                    pform_neg = '- '
++                else:
++                    pform_neg = '-'
++            else:
++                pform_neg = ' - '
++
++            if (pform.binding > prettyForm.NEG
++                or pform.binding == prettyForm.ADD):
++                p = stringPict(*pform.parens())
++            else:
++                p = pform
++            p = stringPict.next(pform_neg, p)
++            return prettyForm(binding=prettyForm.NEG, *p)
++
++        for i, term in enumerate(terms):
++            if isinstance(term, MatMul) and _coeff_isneg(term):
++                coeff, matrices = term.as_coeff_matrices()
++                if coeff == -1:
++                    if len(matrices) == 1:
++                        pform = self._print(matrices[0])
++                    else:
++                        pform = self._print(MatMul(*matrices))
++                else:
++                    pform = self._print(MatMul(-coeff, *matrices))
++                pforms.append(pretty_negative(pform, i))
++            elif term.is_Number and term < 0:
++                pform = self._print(-term)
++                pforms.append(pretty_negative(pform, i))
++            else:
++                pforms.append(self._print(term))
++
++        return prettyForm.__add__(*pforms)
+ 
+     def _print_MatMul(self, expr):
+         args = list(expr.args)
+-        from sympy import Add, MatAdd, HadamardProduct
++        from sympy import Add, MatAdd, HadamardProduct, MatMul
++        from sympy.core.function import _coeff_isneg
++
++        # Handle negative coefficient like _print_Mul does
++        coeff, matrices = expr.as_coeff_matrices()
++        if coeff == -1:
++            expr = MatMul(*matrices)
++            sign = "-"
++        else:
++            sign = ""
++
++        args = list(expr.args)
+         for i, a in enumerate(args):
+             if (isinstance(a, (Add, MatAdd, HadamardProduct))
+                     and len(expr.args) > 1):
+@@ -831,7 +882,10 @@ def _print_MatMul(self, expr):
+             else:
+                 args[i] = self._print(a)
+ 
+-        return prettyForm.__mul__(*args)
++        result = prettyForm.__mul__(*args)
++        if sign:
++            result = prettyForm(binding=prettyForm.NEG, *stringPict.next(sign, result))
++        return result
+ 
+     def _print_DotProduct(self, expr):
+         args = list(expr.args)
+diff --git a/sympy/printing/str.py b/sympy/printing/str.py
+index 0baefe0f7..2bbb8da3e 100644
+--- a/sympy/printing/str.py
++++ b/sympy/printing/str.py
+@@ -304,16 +304,42 @@ def _print_Mul(self, expr):
+             return sign + '*'.join(a_str) + "/(%s)" % '*'.join(b_str)
+ 
+     def _print_MatMul(self, expr):
+-        return '*'.join([self.parenthesize(arg, precedence(expr))
+-            for arg in expr.args])
++        from sympy import MatAdd, HadamardProduct, MatMul
++        
++        # Handle negative coefficient like _print_Mul does
++        coeff, matrices = expr.as_coeff_matrices()
++        if coeff == -1:
++            expr = MatMul(*matrices)
++            sign = "-"
++        else:
++            sign = ""
++        
++        a_str = [self.parenthesize(x, precedence(expr)) for x in expr.args]
++        return sign + '*'.join(a_str)
+ 
+     def _print_HadamardProduct(self, expr):
+         return '.*'.join([self.parenthesize(arg, precedence(expr))
+             for arg in expr.args])
+ 
+     def _print_MatAdd(self, expr):
+-        return ' + '.join([self.parenthesize(arg, precedence(expr))
+-            for arg in expr.args])
++        terms = list(expr.args)
++        PREC = precedence(expr)
++        l = []
++        for term in terms:
++            t = self._print(term)
++            if t.startswith('-'):
++                sign = "-"
++                t = t[1:]
++            else:
++                sign = "+"
++            if precedence(term) < PREC:
++                l.extend([sign, "(%s)" % t])
++            else:
++                l.extend([sign, t])
++        sign = l.pop(0)
++        if sign == '+':
++            sign = ""
++        return sign + ' '.join(l)
+ 
+     def _print_NaN(self, expr):
+         return 'nan'
