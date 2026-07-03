@@ -1,0 +1,110 @@
+diff --git a/seaborn/_core/plot.py b/seaborn/_core/plot.py
+index 4f0290a4..df58d4d9 100644
+--- a/seaborn/_core/plot.py
++++ b/seaborn/_core/plot.py
+@@ -1475,21 +1475,23 @@ class Plotter:
+ 
+                 axes_df = self._filter_subplot_data(df, view)
+ 
+-                with pd.option_context("mode.use_inf_as_null", True):
+-                    if keep_na:
+-                        # The simpler thing to do would be x.dropna().reindex(x.index).
+-                        # But that doesn't work with the way that the subset iteration
+-                        # is written below, which assumes data for grouping vars.
+-                        # Matplotlib (usually?) masks nan data, so this should "work".
+-                        # Downstream code can also drop these rows, at some speed cost.
+-                        present = axes_df.notna().all(axis=1)
+-                        nulled = {}
+-                        for axis in "xy":
+-                            if axis in axes_df:
+-                                nulled[axis] = axes_df[axis].where(present)
+-                        axes_df = axes_df.assign(**nulled)
+-                    else:
+-                        axes_df = axes_df.dropna()
++                # Replace inf with nan so that dropna works consistently
++                # (use_inf_as_null option was removed in pandas 3.0)
++                axes_df = axes_df.replace([float("inf"), float("-inf")], float("nan"))
++                if keep_na:
++                    # The simpler thing to do would be x.dropna().reindex(x.index).
++                    # But that doesn't work with the way that the subset iteration
++                    # is written below, which assumes data for grouping vars.
++                    # Matplotlib (usually?) masks nan data, so this should "work".
++                    # Downstream code can also drop these rows, at some speed cost.
++                    present = axes_df.notna().all(axis=1)
++                    nulled = {}
++                    for axis in "xy":
++                        if axis in axes_df:
++                            nulled[axis] = axes_df[axis].where(present)
++                    axes_df = axes_df.assign(**nulled)
++                else:
++                    axes_df = axes_df.dropna()
+ 
+                 subplot_keys = {}
+                 for dim in ["col", "row"]:
+@@ -1644,6 +1646,23 @@ class Plotter:
+                         hi = cast(float, hi) + 0.5
+                     ax.set(**{f"{axis}lim": (lo, hi)})
+ 
++                # Nominal scale adjustments
++                if axis_key in self._scales:
++                    from seaborn._core.scales import Nominal
++                    if isinstance(self._scales[axis_key], Nominal):
++                        # 1. Set limits to +/- 0.5 from first/last tick
++                        # (but only if the user hasn't specified explicit limits)
++                        if axis_key not in p._limits:
++                            n = len(getattr(ax, f"get_{axis}ticks")())
++                            if axis == "x":
++                                ax.set_xlim(-.5, n - .5, auto=None)
++                            else:
++                                # Setting reversed limits also inverts the axis
++                                ax.set_ylim(n - .5, -.5, auto=None)
++
++                        # 2. Turn off grid
++                        getattr(ax, f"{axis}axis").grid(False)
++
+         engine_default = None if p._target is not None else "tight"
+         layout_engine = p._layout_spec.get("engine", engine_default)
+         set_layout_engine(self._figure, layout_engine)
+diff --git a/seaborn/_oldcore.py b/seaborn/_oldcore.py
+index 192af381..9ae785f5 100644
+--- a/seaborn/_oldcore.py
++++ b/seaborn/_oldcore.py
+@@ -1116,13 +1116,15 @@ class VectorPlotter:
+                 parts = []
+                 grouped = self.plot_data[var].groupby(self.converters[var], sort=False)
+                 for converter, orig in grouped:
+-                    with pd.option_context('mode.use_inf_as_null', True):
+-                        orig = orig.dropna()
+-                        if var in self.var_levels:
+-                            # TODO this should happen in some centralized location
+-                            # it is similar to GH2419, but more complicated because
+-                            # supporting `order` in categorical plots is tricky
+-                            orig = orig[orig.isin(self.var_levels[var])]
++                    # Replace inf with nan so that dropna works consistently
++                    # (use_inf_as_null option was removed in pandas 3.0)
++                    orig = orig.replace([float("inf"), float("-inf")], float("nan"))
++                    orig = orig.dropna()
++                    if var in self.var_levels:
++                        # TODO this should happen in some centralized location
++                        # it is similar to GH2419, but more complicated because
++                        # supporting `order` in categorical plots is tricky
++                        orig = orig[orig.isin(self.var_levels[var])]
+                     comp = pd.to_numeric(converter.convert_units(orig))
+                     if converter.get_scale() == "log":
+                         comp = np.log10(comp)
+diff --git a/seaborn/categorical.py b/seaborn/categorical.py
+index 3394c9c7..67179b06 100644
+--- a/seaborn/categorical.py
++++ b/seaborn/categorical.py
+@@ -1790,8 +1790,10 @@ class _LVPlotter(_CategoricalPlotter):
+         vals = np.asarray(vals)
+         # Remove infinite values while handling a 'object' dtype
+         # that can come from pd.Float64Dtype() input
+-        with pd.option_context('mode.use_inf_as_null', True):
+-            vals = vals[~pd.isnull(vals)]
++        # Replace inf with nan so that isnull works consistently
++        # (use_inf_as_null option was removed in pandas 3.0)
++        vals = np.where(np.isinf(vals), np.nan, vals)
++        vals = vals[~pd.isnull(vals)]
+         n = len(vals)
+         p = self.outlier_prop

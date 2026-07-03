@@ -1,0 +1,26 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index 9735ce10c8..140783b97f 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -550,6 +550,22 @@ class Query(BaseExpression):
+         Perform a COUNT() query using the current filter constraints.
+         """
+         obj = self.clone()
++        # Only include annotations that are referenced by ordering to
++        # avoid unnecessary subqueries. Annotations that are referenced
++        # by filters or other annotations have their expressions already
++        # resolved and embedded in those contexts, so they can be safely
++        # removed. Only remove aggregate annotations as non-aggregate
++        # annotations may affect the GROUP BY.
++        order_by_refs = {
++            field for field in chain(obj.order_by, obj.extra_order_by)
++            if isinstance(field, str)
++        }
++        for alias in list(obj.annotations):
++            if (
++                alias not in order_by_refs
++                and obj.annotations[alias].contains_aggregate
++            ):
++                del obj.annotations[alias]
+         obj.add_annotation(Count("*"), alias="__count", is_summary=True)
+         return obj.get_aggregation(using, ["__count"])["__count"]

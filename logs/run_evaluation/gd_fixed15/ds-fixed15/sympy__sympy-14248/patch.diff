@@ -1,0 +1,217 @@
+diff --git a/sympy/assumptions/sathandlers.py b/sympy/assumptions/sathandlers.py
+index 61d62d04c..881a5f9ba 100644
+--- a/sympy/assumptions/sathandlers.py
++++ b/sympy/assumptions/sathandlers.py
+@@ -1,6 +1,7 @@
+ from __future__ import print_function, division
+ 
+-from collections import MutableMapping, defaultdict
++from collections.abc import MutableMapping
++from collections import defaultdict
+ 
+ from sympy.core import (Add, Mul, Pow, Integer, Number, NumberSymbol,)
+ from sympy.core.numbers import ImaginaryUnit
+diff --git a/sympy/core/basic.py b/sympy/core/basic.py
+index bdfebf24c..5f998ce45 100644
+--- a/sympy/core/basic.py
++++ b/sympy/core/basic.py
+@@ -1,6 +1,7 @@
+ """Base class for all the objects in SymPy"""
+ from __future__ import print_function, division
+-from collections import Mapping, defaultdict
++from collections.abc import Mapping
++defaultdict = __import__("collections").defaultdict
+ from itertools import chain
+ 
+ from .assumptions import BasicMeta, ManagedProperties
+diff --git a/sympy/core/containers.py b/sympy/core/containers.py
+index 15abd93e3..8ac11e7ec 100644
+--- a/sympy/core/containers.py
++++ b/sympy/core/containers.py
+@@ -268,7 +268,7 @@ def _sorted_args(self):
+         return tuple(sorted(self.args, key=default_sort_key))
+ 
+ 
+-class OrderedSet(collections.MutableSet):
++class OrderedSet(collections.abc.MutableSet):
+     def __init__(self, iterable=None):
+         if iterable:
+             self.map = collections.OrderedDict((item, None) for item in iterable)
+diff --git a/sympy/core/expr.py b/sympy/core/expr.py
+index 421e6cd8e..1867b7199 100644
+--- a/sympy/core/expr.py
++++ b/sympy/core/expr.py
+@@ -9,7 +9,8 @@
+ from .compatibility import reduce, as_int, default_sort_key, range
+ from mpmath.libmp import mpf_log, prec_to_dps
+ 
+-from collections import defaultdict, Iterable
++from collections import defaultdict
++from collections.abc import Iterable
+ 
+ class Expr(Basic, EvalfMixin):
+     """
+diff --git a/sympy/core/function.py b/sympy/core/function.py
+index 3f7374fe6..8cbfb0d78 100644
+--- a/sympy/core/function.py
++++ b/sympy/core/function.py
+@@ -79,7 +79,7 @@ def _coeff_isneg(a):
+ 
+     """
+ 
+-    if a.is_Mul:
++    if a.is_Mul or a.is_MatMul:
+         a = a.args[0]
+     return a.is_Number and a.is_negative
+ 
+diff --git a/sympy/plotting/plot.py b/sympy/plotting/plot.py
+index 18c6f7afe..d740983ee 100644
+--- a/sympy/plotting/plot.py
++++ b/sympy/plotting/plot.py
+@@ -25,7 +25,7 @@
+ from __future__ import print_function, division
+ 
+ import inspect
+-from collections import Callable
++from collections.abc import Callable
+ import warnings
+ import sys
+ 
+diff --git a/sympy/printing/latex.py b/sympy/printing/latex.py
+index 8253b2f68..d33847539 100644
+--- a/sympy/printing/latex.py
++++ b/sympy/printing/latex.py
+@@ -1478,9 +1478,20 @@ def _print_Adjoint(self, expr):
+ 
+     def _print_MatAdd(self, expr):
+         terms = list(expr.args)
+-        tex = " + ".join(map(self._print, terms))
++        tex = ""
++        for i, term in enumerate(terms):
++            if i == 0:
++                pass
++            elif _coeff_isneg(term):
++                tex += " - "
++                term = -term
++            else:
++                tex += " + "
++            term_tex = self._print(term)
++            if self._needs_add_brackets(term):
++                term_tex = r"\left(%s
+ight)" % term_tex
++            tex += term_tex
+         return tex
+-
+     def _print_MatMul(self, expr):
+         from sympy import Add, MatAdd, HadamardProduct
+ 
+diff --git a/sympy/printing/pretty/pretty.py b/sympy/printing/pretty/pretty.py
+index db24f4c61..cf51b3ddd 100644
+--- a/sympy/printing/pretty/pretty.py
++++ b/sympy/printing/pretty/pretty.py
+@@ -819,19 +819,53 @@ def _print_BlockMatrix(self, B):
+         return self._print(B.blocks)
+ 
+     def _print_MatAdd(self, expr):
+-        return self._print_seq(expr.args, None, None, ' + ')
++        terms = list(expr.args)
++        pforms = []
++        for i, term in enumerate(terms):
++            if _coeff_isneg(term):
++                pform = self._print(-term)
++                if i == 0:
++                    if pform.height() > 1:
++                        pform_neg = '- '
++                    else:
++                        pform_neg = '-'
++                else:
++                    pform_neg = ' - '
++                if (pform.binding > prettyForm.NEG
++                    or pform.binding == prettyForm.ADD):
++                    p = stringPict(*pform.parens())
++                else:
++                    p = pform
++                p = stringPict.next(pform_neg, p)
++                pforms.append(prettyForm(binding=prettyForm.NEG, *p))
++            else:
++                if i == 0:
++                    pforms.append(self._print(term))
++                else:
++                    pforms.append(prettyForm(*stringPict.next(' + ', self._print(term))))
++        return prettyForm.__add__(*pforms)
+ 
+     def _print_MatMul(self, expr):
+         args = list(expr.args)
+         from sympy import Add, MatAdd, HadamardProduct
++        if args[0].is_Number and args[0].is_negative:
++            sign = "-"
++            args[0] = -args[0]
++            if args[0] == 1:
++                args.pop(0)
++        else:
++            sign = ""
+         for i, a in enumerate(args):
+             if (isinstance(a, (Add, MatAdd, HadamardProduct))
+-                    and len(expr.args) > 1):
++                    and len(args) > 1):
+                 args[i] = prettyForm(*self._print(a).parens())
+             else:
+                 args[i] = self._print(a)
+ 
+-        return prettyForm.__mul__(*args)
++        result = prettyForm.__mul__(*args)
++        if sign:
++            result = prettyForm(*stringPict.next(sign, result))
++        return result
+ 
+     def _print_DotProduct(self, expr):
+         args = list(expr.args)
+diff --git a/sympy/printing/str.py b/sympy/printing/str.py
+index 0baefe0f7..601a672e6 100644
+--- a/sympy/printing/str.py
++++ b/sympy/printing/str.py
+@@ -304,16 +304,40 @@ def _print_Mul(self, expr):
+             return sign + '*'.join(a_str) + "/(%s)" % '*'.join(b_str)
+ 
+     def _print_MatMul(self, expr):
+-        return '*'.join([self.parenthesize(arg, precedence(expr))
+-            for arg in expr.args])
++        args = list(expr.args)
++        if args[0].is_Number and args[0].is_negative:
++            sign = "-"
++            args[0] = -args[0]
++            if args[0] == 1:
++                args.pop(0)
++        else:
++            sign = ""
++        return sign + '*'.join([self.parenthesize(arg, precedence(expr))
++            for arg in args])
+ 
+     def _print_HadamardProduct(self, expr):
+         return '.*'.join([self.parenthesize(arg, precedence(expr))
+             for arg in expr.args])
+ 
+     def _print_MatAdd(self, expr):
+-        return ' + '.join([self.parenthesize(arg, precedence(expr))
+-            for arg in expr.args])
++        terms = list(expr.args)
++        PREC = precedence(expr)
++        l = []
++        for term in terms:
++            t = self._print(term)
++            if t.startswith('-'):
++                sign = "-"
++                t = t[1:]
++            else:
++                sign = "+"
++            if precedence(term) < PREC:
++                l.extend([sign, "(%s)" % t])
++            else:
++                l.extend([sign, t])
++        sign = l.pop(0)
++        if sign == '+':
++            sign = ""
++        return sign + ' '.join(l)
+ 
+     def _print_NaN(self, expr):
+         return 'nan'
