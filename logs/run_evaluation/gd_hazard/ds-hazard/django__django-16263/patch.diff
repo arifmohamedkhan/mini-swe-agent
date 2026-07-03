@@ -1,0 +1,84 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index 9735ce10c8..02f34f8f96 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -550,9 +550,80 @@ class Query(BaseExpression):
+         Perform a COUNT() query using the current filter constraints.
+         """
+         obj = self.clone()
++        # Only include annotations that are referenced by filters, ordering,
++        # or other annotations to avoid unnecessary joins and computations.
++        for alias, annotation in list(obj.annotations.items()):
++            if not self._annotation_is_referenced(alias, annotation):
++                del obj.annotations[alias]
++                # Decrement the refcount for any joins that were only used
++                # by this annotation and not by other remaining annotations.
++                for col in self._get_cols(annotation):
++                    if not any(
++                        col.alias in {c.alias for c in self._get_cols(a)}
++                        for a in obj.annotations.values()
++                    ):
++                        obj.unref_alias(col.alias)
+         obj.add_annotation(Count("*"), alias="__count", is_summary=True)
+         return obj.get_aggregation(using, ["__count"])["__count"]
+ 
++    def _annotation_is_referenced(self, alias, annotation):
++        """
++        Return True if the annotation is referenced by filters, ordering,
++        other annotations, or is needed for the GROUP BY.
++        """
++        # Check if the annotation is referenced in the WHERE clause.
++        for child in self.where.children:
++            for expr in self._get_expressions(child):
++                if expr is annotation:
++                    return True
++
++        # Check if the annotation is referenced in the ORDER BY clause.
++        for item in self.order_by:
++            if isinstance(item, str):
++                name = item.lstrip("-")
++                if name == alias:
++                    return True
++            else:
++                for expr in self._get_expressions(item):
++                    if hasattr(expr, "name") and isinstance(expr, F):
++                        if expr.name == alias:
++                            return True
++                    if hasattr(expr, "refs") and expr.refs == alias:
++                        return True
++
++        # Check if the annotation is referenced by other annotations.
++        for other_alias, other_annotation in self.annotations.items():
++            if other_alias == alias:
++                continue
++            for expr in self._get_expressions(other_annotation):
++                if expr is annotation:
++                    return True
++
++        # Check if the annotation is needed for the GROUP BY.
++        # Non-aggregate annotations with group by cols must be included
++        # in the GROUP BY to avoid incorrect results.
++        if not annotation.contains_aggregate and annotation.get_group_by_cols():
++            return True
++
++        return False
++
++    @staticmethod
++    def _get_expressions(expr):
++        """Recursively yield all expressions in an expression tree."""
++        yield expr
++        if hasattr(expr, "get_source_expressions"):
++            for child in expr.get_source_expressions():
++                yield from Query._get_expressions(child)
++
++    @staticmethod
++    def _get_cols(expr):
++        """Recursively yield all Col objects in an expression tree."""
++        if isinstance(expr, Col):
++            yield expr
++        if hasattr(expr, "get_source_expressions"):
++            for child in expr.get_source_expressions():
++                yield from Query._get_cols(child)
++
+     def has_filters(self):
+         return self.where

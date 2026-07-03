@@ -1,0 +1,74 @@
+diff --git a/sympy/concrete/summations.py b/sympy/concrete/summations.py
+index 372487664..105a4ea5b 100644
+--- a/sympy/concrete/summations.py
++++ b/sympy/concrete/summations.py
+@@ -192,6 +192,52 @@ def doit(self, **hints):
+                         return zeta_function
+                     return self
+                 else:
++                    # If f is a Piecewise and there are remaining limits,
++                    # try to evaluate each argument separately
++                    if isinstance(f, Piecewise):
++                        from sympy.sets import Interval
++                        from sympy.simplify import simplify
++                        from sympy.logic.boolalg import Implies
++                        newargs = []
++                        all_ok = True
++                        for arg in f.args:
++                            cond = arg.cond
++                            if cond == True:
++                                newexpr = Sum(arg.expr, *self.limits[n:]).doit()
++                                if newexpr is None:
++                                    all_ok = False
++                                    break
++                                newargs.append((newexpr, True))
++                            elif any(i in cond.free_symbols for i, a, b in self.limits[n:]):
++                                # Check if the condition is implied by the remaining limits
++                                # For each remaining limit, check if the condition is implied
++                                implied = True
++                                for (li, la, lb) in self.limits[n:]:
++                                    if li in cond.free_symbols:
++                                        interval_cond = Interval(la, lb).as_relational(li)
++                                        if simplify(Implies(interval_cond, cond)) != True:
++                                            implied = False
++                                            break
++                                if implied:
++                                    newexpr = Sum(arg.expr, *self.limits[n:]).doit()
++                                    if newexpr is None:
++                                        all_ok = False
++                                        break
++                                    newargs.append((newexpr, True))
++                                else:
++                                    all_ok = False
++                                    break
++                            else:
++                                # Condition doesn't depend on any remaining limit variable
++                                newexpr = Sum(arg.expr, *self.limits[n:]).doit()
++                                if newexpr is None:
++                                    all_ok = False
++                                    break
++                                newargs.append((newexpr, cond))
++                        if all_ok:
++                            if len(newargs) == 1 and newargs[0][1] == True:
++                                return newargs[0][0]
++                            return f.func(*newargs)
+                     return self.func(f, *self.limits[n:])
+             f = newf
+ 
+diff --git a/sympy/matrices/expressions/matexpr.py b/sympy/matrices/expressions/matexpr.py
+index b4d759836..1cb0cf4df 100644
+--- a/sympy/matrices/expressions/matexpr.py
++++ b/sympy/matrices/expressions/matexpr.py
+@@ -476,10 +476,8 @@ def conjugate(self):
+         return self
+ 
+     def _entry(self, i, j):
+-        if i == j:
+-            return S.One
+-        else:
+-            return S.Zero
++        from sympy.functions.special.tensor_functions import KroneckerDelta
++        return KroneckerDelta(i, j)
+ 
+     def _eval_determinant(self):
+         return S.One
