@@ -1,0 +1,22 @@
+[
+ {
+  "instance_id": "django__django-11451",
+  "model_name_or_path": "expb",
+  "model_patch": "diff --git a/django/contrib/auth/backends.py b/django/contrib/auth/backends.py\nindex f4b1722757..a3765ae0f1 100644\n--- a/django/contrib/auth/backends.py\n+++ b/django/contrib/auth/backends.py\n@@ -39,6 +39,8 @@ class ModelBackend(BaseBackend):\n     def authenticate(self, request, username=None, password=None, **kwargs):\n         if username is None:\n             username = kwargs.get(UserModel.USERNAME_FIELD)\n+        if username is None or password is None:\n+            return\n         try:\n             user = UserModel._default_manager.get_by_natural_key(username)\n         except UserModel.DoesNotExist:\n"
+ },
+ {
+  "instance_id": "django__django-11790",
+  "model_name_or_path": "expb",
+  "model_patch": "diff --git a/django/contrib/auth/forms.py b/django/contrib/auth/forms.py\nindex a0cfed0995..b4fb55c1b4 100644\n--- a/django/contrib/auth/forms.py\n+++ b/django/contrib/auth/forms.py\n@@ -191,7 +191,9 @@ class AuthenticationForm(forms.Form):\n \n         # Set the max length and label for the \"username\" field.\n         self.username_field = UserModel._meta.get_field(UserModel.USERNAME_FIELD)\n-        self.fields['username'].max_length = self.username_field.max_length or 254\n+        username_max_length = self.username_field.max_length or 254\n+        self.fields['username'].max_length = username_max_length\n+        self.fields['username'].widget.attrs['maxlength'] = username_max_length\n         if self.fields['username'].label is None:\n             self.fields['username'].label = capfirst(self.username_field.verbose_name)\n \n"
+ },
+ {
+  "instance_id": "django__django-11820",
+  "model_name_or_path": "expb",
+  "model_patch": "diff --git a/django/db/models/base.py b/django/db/models/base.py\nindex 3ce711f3f1..cf826ee75a 100644\n--- a/django/db/models/base.py\n+++ b/django/db/models/base.py\n@@ -1708,7 +1708,11 @@ class Model(metaclass=ModelBase):\n             fld = None\n             for part in field.split(LOOKUP_SEP):\n                 try:\n-                    fld = _cls._meta.get_field(part)\n+                    # pk is an alias that won't be found by opts.get_field.\n+                    if part == 'pk':\n+                        fld = _cls._meta.pk\n+                    else:\n+                        fld = _cls._meta.get_field(part)\n                     if fld.is_relation:\n                         _cls = fld.get_path_info()[-1].to_opts.model\n                 except (FieldDoesNotExist, AttributeError):\n"
+ },
+ {
+  "instance_id": "django__django-12308",
+  "model_name_or_path": "expb",
+  "model_patch": "diff --git a/django/contrib/admin/utils.py b/django/contrib/admin/utils.py\nindex e4ddc8f017..021a086e65 100755\n--- a/django/contrib/admin/utils.py\n+++ b/django/contrib/admin/utils.py\n@@ -398,6 +398,11 @@ def display_for_field(value, field, empty_value_display):\n         return formats.number_format(value)\n     elif isinstance(field, models.FileField) and value:\n         return format_html('<a href=\"{}\">{}</a>', value.url, value)\n+    elif isinstance(field, models.JSONField) and value:\n+        try:\n+            return field.get_prep_value(value)\n+        except TypeError:\n+            return display_for_value(value, empty_value_display)\n     else:\n         return display_for_value(value, empty_value_display)\n \n"
+ }
+]

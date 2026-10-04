@@ -1,0 +1,12 @@
+[
+ {
+  "instance_id": "pydata__xarray-4094",
+  "model_name_or_path": "expb",
+  "model_patch": "diff --git a/xarray/core/dataarray.py b/xarray/core/dataarray.py\nindex b0df8749..44cb30ea 100755\n--- a/xarray/core/dataarray.py\n+++ b/xarray/core/dataarray.py\n@@ -1962,6 +1962,9 @@ class DataArray(AbstractArray, DataWithCoords):\n         data_dict = {}\n         for k in variables:\n             data_dict[k] = self.sel({variable_dim: k}).squeeze(drop=True)\n+            # drop the stacked dimension coordinate, which may remain as a\n+            # scalar coordinate for single-dimension variables\n+            data_dict[k] = data_dict[k].drop_vars(dim, errors=\"ignore\")\n \n         # unstacked dataset\n         return Dataset(data_dict)\n"
+ },
+ {
+  "instance_id": "pydata__xarray-4356",
+  "model_name_or_path": "expb",
+  "model_patch": "diff --git a/doc/whats-new.rst b/doc/whats-new.rst\nindex 35c0edf5..17afecd7 100644\n--- a/doc/whats-new.rst\n+++ b/doc/whats-new.rst\n@@ -69,6 +69,9 @@ Bug fixes\n   and :py:meth:`DataArray.str.wrap` (:issue:`4334`). By `Mathias Hauser <https://github.com/mathause>`_.\n - Fixed overflow issue causing incorrect results in computing means of :py:class:`cftime.datetime`\n   arrays (:issue:`4341`). By `Spencer Clark <https://github.com/spencerkclark>`_.\n+- Fixed ``min_count`` not being available for reductions over more than one\n+  dimension in :py:meth:`DataArray.sum` and :py:meth:`DataArray.prod`\n+  (:issue:`4351`).\n \n Documentation\n ~~~~~~~~~~~~~\ndiff --git a/xarray/core/nanops.py b/xarray/core/nanops.py\nindex 41c8d258..a29cdb12 100644\n--- a/xarray/core/nanops.py\n+++ b/xarray/core/nanops.py\n@@ -26,13 +26,8 @@ def _maybe_null_out(result, axis, mask, min_count=1):\n     \"\"\"\n     xarray version of pandas.core.nanops._maybe_null_out\n     \"\"\"\n-    if hasattr(axis, \"__len__\"):  # if tuple or list\n-        raise ValueError(\n-            \"min_count is not available for reduction with more than one dimensions.\"\n-        )\n-\n     if axis is not None and getattr(result, \"ndim\", False):\n-        null_mask = (mask.shape[axis] - mask.sum(axis) - min_count) < 0\n+        null_mask = (np.take(mask.shape, axis).prod() - mask.sum(axis) - min_count) < 0\n         if null_mask.any():\n             dtype, fill_value = dtypes.maybe_promote(result.dtype)\n             result = result.astype(dtype)\n"
+ }
+]

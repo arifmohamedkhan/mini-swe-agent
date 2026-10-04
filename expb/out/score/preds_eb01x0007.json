@@ -1,0 +1,12 @@
+[
+ {
+  "instance_id": "django__django-11820",
+  "model_name_or_path": "expb",
+  "model_patch": "diff --git a/django/db/models/base.py b/django/db/models/base.py\nindex 3ce711f3f1..6bf1f80382 100644\n--- a/django/db/models/base.py\n+++ b/django/db/models/base.py\n@@ -1708,11 +1708,17 @@ class Model(metaclass=ModelBase):\n             fld = None\n             for part in field.split(LOOKUP_SEP):\n                 try:\n+                    # pk is an alias that won't be found by opts.get_field.\n+                    if part == 'pk':\n+                        _cls = _cls._meta.pk.related_model\n+                        continue\n                     fld = _cls._meta.get_field(part)\n                     if fld.is_relation:\n                         _cls = fld.get_path_info()[-1].to_opts.model\n                 except (FieldDoesNotExist, AttributeError):\n-                    if fld is None or fld.get_transform(part) is None:\n+                    if fld is None or (\n+                        fld.get_transform(part) is None and fld.get_lookup(part) is None\n+                    ):\n                         errors.append(\n                             checks.Error(\n                                 \"'ordering' refers to the nonexistent field, \"\n"
+ },
+ {
+  "instance_id": "django__django-12308",
+  "model_name_or_path": "expb",
+  "model_patch": "diff --git a/django/contrib/admin/utils.py b/django/contrib/admin/utils.py\nindex e4ddc8f017..bace24517c 100755\n--- a/django/contrib/admin/utils.py\n+++ b/django/contrib/admin/utils.py\n@@ -1,5 +1,6 @@\n import datetime\n import decimal\n+import json\n from collections import defaultdict\n \n from django.core.exceptions import FieldDoesNotExist\n@@ -398,6 +399,11 @@ def display_for_field(value, field, empty_value_display):\n         return formats.number_format(value)\n     elif isinstance(field, models.FileField) and value:\n         return format_html('<a href=\"{}\">{}</a>', value.url, value)\n+    elif isinstance(field, models.JSONField) and value:\n+        try:\n+            return json.dumps(value, cls=field.encoder)\n+        except TypeError:\n+            return display_for_value(value, empty_value_display)\n     else:\n         return display_for_value(value, empty_value_display)\n \n"
+ }
+]

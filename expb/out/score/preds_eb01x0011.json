@@ -1,0 +1,17 @@
+[
+ {
+  "instance_id": "django__django-12774",
+  "model_name_or_path": "expb",
+  "model_patch": "diff --git a/django/db/models/query.py b/django/db/models/query.py\nindex d9c9b0db04..907001addd 100644\n--- a/django/db/models/query.py\n+++ b/django/db/models/query.py\n@@ -690,7 +690,9 @@ class QuerySet:\n         assert not self.query.is_sliced, \\\n             \"Cannot use 'limit' or 'offset' with in_bulk\"\n         if field_name != 'pk' and not self.model._meta.get_field(field_name).unique:\n-            raise ValueError(\"in_bulk()'s field_name must be a unique field but %r isn't.\" % field_name)\n+            unique_constraints = self.model._meta.total_unique_constraints\n+            if not any(field_name in constraint.fields for constraint in unique_constraints):\n+                raise ValueError(\"in_bulk()'s field_name must be a unique field but %r isn't.\" % field_name)\n         if id_list is not None:\n             if not id_list:\n                 return {}\n"
+ },
+ {
+  "instance_id": "django__django-12965",
+  "model_name_or_path": "expb",
+  "model_patch": "diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py\nindex 29e33c075f..c800cfc463 100644\n--- a/django/db/models/sql/compiler.py\n+++ b/django/db/models/sql/compiler.py\n@@ -1423,6 +1423,7 @@ class SQLDeleteCompiler(SQLCompiler):\n         Create the SQL for this query. Return the SQL string and list of\n         parameters.\n         \"\"\"\n+        self.pre_sql_setup()\n         if self.single_alias:\n             return self._as_sql(self.query)\n         innerq = self.query.clone()\n"
+ },
+ {
+  "instance_id": "django__django-13195",
+  "model_name_or_path": "expb",
+  "model_patch": "diff --git a/django/http/response.py b/django/http/response.py\nindex e00bcacefb..b9ad30c5ea 100644\n--- a/django/http/response.py\n+++ b/django/http/response.py\n@@ -210,13 +210,13 @@ class HttpResponseBase:\n         value = signing.get_cookie_signer(salt=key + salt).sign(value)\n         return self.set_cookie(key, value, **kwargs)\n \n-    def delete_cookie(self, key, path='/', domain=None):\n+    def delete_cookie(self, key, path='/', domain=None, samesite=None):\n         # Most browsers ignore the Set-Cookie header if the cookie name starts\n         # with __Host- or __Secure- and the cookie doesn't use the secure flag.\n         secure = key.startswith(('__Secure-', '__Host-'))\n         self.set_cookie(\n             key, max_age=0, path=path, domain=domain, secure=secure,\n-            expires='Thu, 01 Jan 1970 00:00:00 GMT',\n+            expires='Thu, 01 Jan 1970 00:00:00 GMT', samesite=samesite,\n         )\n \n     # Common methods used by subclasses\ndiff --git a/docs/ref/request-response.txt b/docs/ref/request-response.txt\nindex 705da1842a..2630cdbcca 100644\n--- a/docs/ref/request-response.txt\n+++ b/docs/ref/request-response.txt\n@@ -890,7 +890,7 @@ Methods\n \n         Using ``samesite='None'`` (string) was allowed.\n \n-.. method:: HttpResponse.delete_cookie(key, path='/', domain=None)\n+.. method:: HttpResponse.delete_cookie(key, path='/', domain=None, samesite=None)\n \n     Deletes the cookie with the given key. Fails silently if the key doesn't\n     exist.\n@@ -899,6 +899,10 @@ Methods\n     values you used in ``set_cookie()`` -- otherwise the cookie may not be\n     deleted.\n \n+    .. versionchanged:: 3.1\n+\n+        The ``samesite`` argument was added.\n+\n .. method:: HttpResponse.close()\n \n     This method is called at the end of the request directly by the WSGI\n"
+ }
+]

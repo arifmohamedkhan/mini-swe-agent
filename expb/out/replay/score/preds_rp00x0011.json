@@ -1,0 +1,12 @@
+[
+ {
+  "instance_id": "django__django-11532",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/django/core/mail/message.py b/django/core/mail/message.py\nindex e393b4cf5c..86be1dc74d 100644\n--- a/django/core/mail/message.py\n+++ b/django/core/mail/message.py\n@@ -257,7 +257,7 @@ class EmailMessage:\n             msg['Date'] = formatdate(localtime=settings.EMAIL_USE_LOCALTIME)\n         if 'message-id' not in header_names:\n             # Use cached DNS_NAME for performance\n-            msg['Message-ID'] = make_msgid(domain=DNS_NAME)\n+            msg['Message-ID'] = make_msgid(domain=DNS_NAME.encode_idna())\n         for name, value in self.extra_headers.items():\n             if name.lower() != 'from':  # From is already handled\n                 msg[name] = value\ndiff --git a/django/core/mail/utils.py b/django/core/mail/utils.py\nindex d18dfe4667..394a9702cd 100644\n--- a/django/core/mail/utils.py\n+++ b/django/core/mail/utils.py\n@@ -16,5 +16,13 @@ class CachedDnsName:\n             self._fqdn = socket.getfqdn()\n         return self._fqdn\n \n+    def encode_idna(self):\n+        fqdn = self.get_fqdn()\n+        try:\n+            fqdn.encode('ascii')\n+        except UnicodeEncodeError:\n+            fqdn = fqdn.encode('idna').decode('ascii')\n+        return fqdn\n+\n \n DNS_NAME = CachedDnsName()\n"
+ },
+ {
+  "instance_id": "django__django-11790",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/django/contrib/auth/forms.py b/django/contrib/auth/forms.py\nindex a0cfed0995..1fe29c89cc 100644\n--- a/django/contrib/auth/forms.py\n+++ b/django/contrib/auth/forms.py\n@@ -194,6 +194,8 @@ class AuthenticationForm(forms.Form):\n         self.fields['username'].max_length = self.username_field.max_length or 254\n         if self.fields['username'].label is None:\n             self.fields['username'].label = capfirst(self.username_field.verbose_name)\n+        # Update the widget's maxlength attribute to match the field's max_length.\n+        self.fields['username'].widget.attrs['maxlength'] = str(self.fields['username'].max_length)\n \n     def clean(self):\n         username = self.cleaned_data.get('username')\n"
+ }
+]

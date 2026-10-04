@@ -1,0 +1,12 @@
+[
+ {
+  "instance_id": "django__django-13279",
+  "model_name_or_path": "expb",
+  "model_patch": "diff --git a/django/contrib/sessions/backends/base.py b/django/contrib/sessions/backends/base.py\nindex b5453160a5..479eabbb1d 100644\n--- a/django/contrib/sessions/backends/base.py\n+++ b/django/contrib/sessions/backends/base.py\n@@ -108,10 +108,14 @@ class SessionBase:\n \n     def encode(self, session_dict):\n         \"Return the given session dictionary serialized and encoded as a string.\"\n-        return signing.dumps(\n-            session_dict, salt=self.key_salt, serializer=self.serializer,\n-            compress=True,\n-        )\n+        # RemovedInDjango40Warning: when the deprecation ends, replace with:\n+        #   return signing.dumps(\n+        #       session_dict, salt=self.key_salt, serializer=self.serializer,\n+        #       compress=True,\n+        #   )\n+        serialized = self.serializer().dumps(session_dict)\n+        hash = self._hash(serialized)\n+        return base64.b64encode(hash.encode() + b\":\" + serialized).decode('ascii')\n \n     def decode(self, session_data):\n         try:\n"
+ },
+ {
+  "instance_id": "django__django-14351",
+  "model_name_or_path": "expb",
+  "model_patch": "diff --git a/django/db/models/lookups.py b/django/db/models/lookups.py\nindex 5089737034..8d3648b393 100644\n--- a/django/db/models/lookups.py\n+++ b/django/db/models/lookups.py\n@@ -406,6 +406,15 @@ class In(FieldGetDbPrepValueIterableMixin, BuiltinLookup):\n                 self.rhs.add_fields(['pk'])\n             return super().process_rhs(compiler, connection)\n \n+    def get_group_by_cols(self, alias=None):\n+        cols = self.lhs.get_group_by_cols()\n+        if hasattr(self.rhs, 'get_group_by_cols'):\n+            if not getattr(self.rhs, 'has_select_fields', True):\n+                self.rhs.clear_select_clause()\n+                self.rhs.add_fields(['pk'])\n+            cols.extend(self.rhs.get_group_by_cols())\n+        return cols\n+\n     def get_rhs_op(self, connection, rhs):\n         return 'IN %s' % rhs\n \n"
+ }
+]
