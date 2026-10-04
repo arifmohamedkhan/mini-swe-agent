@@ -1,6 +1,6 @@
 # Experiment B: results
 
-Generated 2026-10-04 06:21 by `expb.py --step analyze` from `out/runs/*/*.summary.json` and the harness reports in `out/scores.json`. ANALYSIS_PLAN.md matches its recorded SHA-256; this expb.py matches the code hash recorded in the plan.
+Generated 2026-10-04 16:19 by `expb.py --step analyze` from `out/runs/*/*.summary.json` and the harness reports in `out/scores.json`. ANALYSIS_PLAN.md matches its recorded SHA-256; this expb.py matches the code hash recorded in the plan.
 
 Outcome, unless stated otherwise: the harness result for the rule-built patch of the code at which a run submitted (its own submission or a budget stop); a run that submitted nothing is unresolved.
 
