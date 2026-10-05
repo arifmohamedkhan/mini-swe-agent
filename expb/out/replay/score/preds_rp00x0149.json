@@ -1,0 +1,62 @@
+[
+ {
+  "instance_id": "astropy__astropy-14182",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/astropy/io/ascii/rst.py b/astropy/io/ascii/rst.py\nindex abdeba8ef..a58c21ab4 100755\n--- a/astropy/io/ascii/rst.py\n+++ b/astropy/io/ascii/rst.py\n@@ -57,10 +57,12 @@ class RST(FixedWidth):\n     data_class = SimpleRSTData\n     header_class = SimpleRSTHeader\n \n-    def __init__(self):\n-        super().__init__(delimiter_pad=None, bookend=False)\n+    def __init__(self, header_rows=None):\n+        super().__init__(delimiter_pad=None, bookend=False, header_rows=header_rows)\n \n     def write(self, lines):\n         lines = super().write(lines)\n-        lines = [lines[1]] + lines + [lines[1]]\n+        header_rows = getattr(self.data, 'header_rows', ['name'])\n+        position_line = lines[len(header_rows)]\n+        lines = [position_line] + lines + [position_line]\n         return lines\n"
+ },
+ {
+  "instance_id": "astropy__astropy-14365",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/astropy/io/ascii/qdp.py b/astropy/io/ascii/qdp.py\nindex 83a4f004a..768beb0de 100755\n--- a/astropy/io/ascii/qdp.py\n+++ b/astropy/io/ascii/qdp.py\n@@ -68,7 +68,7 @@ def _line_type(line, delimiter=None):\n     _new_re = rf\"NO({sep}NO)+\"\n     _data_re = rf\"({_decimal_re}|NO|[-+]?nan)({sep}({_decimal_re}|NO|[-+]?nan))*)\"\n     _type_re = rf\"^\\s*((?P<command>{_command_re})|(?P<new>{_new_re})|(?P<data>{_data_re})?\\s*(\\!(?P<comment>.*))?\\s*$\"\n-    _line_type_re = re.compile(_type_re)\n+    _line_type_re = re.compile(_type_re, re.IGNORECASE)\n     line = line.strip()\n     if not line:\n         return \"comment\"\n"
+ },
+ {
+  "instance_id": "django__django-11848",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/django/utils/http.py b/django/utils/http.py\nindex 572cfb4347..ebeeea630c 100755\n--- a/django/utils/http.py\n+++ b/django/utils/http.py\n@@ -176,10 +176,10 @@ def parse_http_date(date):\n     try:\n         year = int(m.group('year'))\n         if year < 100:\n-            if year < 70:\n-                year += 2000\n-            else:\n-                year += 1900\n+            current_year = datetime.datetime.now().year\n+            year += 2000\n+            if year - current_year > 50:\n+                year -= 100\n         month = MONTHS.index(m.group('mon').lower()) + 1\n         day = int(m.group('day'))\n         hour = int(m.group('hour'))\n"
+ },
+ {
+  "instance_id": "django__django-12308",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/django/contrib/admin/utils.py b/django/contrib/admin/utils.py\nindex e4ddc8f017..1aea0ed181 100755\n--- a/django/contrib/admin/utils.py\n+++ b/django/contrib/admin/utils.py\n@@ -398,6 +398,9 @@ def display_for_field(value, field, empty_value_display):\n         return formats.number_format(value)\n     elif isinstance(field, models.FileField) and value:\n         return format_html('<a href=\"{}\">{}</a>', value.url, value)\n+    elif isinstance(field, models.JSONField):\n+        # Display JSON as valid JSON string, handling InvalidJSONInput.\n+        return field.formfield().prepare_value(value)\n     else:\n         return display_for_value(value, empty_value_display)\n \n"
+ },
+ {
+  "instance_id": "django__django-14534",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/django/forms/boundfield.py b/django/forms/boundfield.py\nindex 2ff8b0ee26..59987ee101 100755\n--- a/django/forms/boundfield.py\n+++ b/django/forms/boundfield.py\n@@ -277,7 +277,7 @@ class BoundWidget:\n \n     @property\n     def id_for_label(self):\n-        return 'id_%s_%s' % (self.data['name'], self.data['index'])\n+        return self.data['attrs'].get('id', 'id_%s_%s' % (self.data['name'], self.data['index']))\n \n     @property\n     def choice_label(self):\n"
+ },
+ {
+  "instance_id": "django__django-14752",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/django/contrib/admin/views/autocomplete.py b/django/contrib/admin/views/autocomplete.py\nindex 3903e4c98c..593bb371dd 100755\n--- a/django/contrib/admin/views/autocomplete.py\n+++ b/django/contrib/admin/views/autocomplete.py\n@@ -26,12 +26,14 @@ class AutocompleteJsonView(BaseListView):\n         context = self.get_context_data()\n         return JsonResponse({\n             'results': [\n-                {'id': str(getattr(obj, to_field_name)), 'text': str(obj)}\n-                for obj in context['object_list']\n+                self.serialize_result(obj, to_field_name) for obj in context['object_list']\n             ],\n             'pagination': {'more': context['page_obj'].has_next()},\n         })\n \n+    def serialize_result(self, obj, to_field_name):\n+        return {'id': str(getattr(obj, to_field_name)), 'text': str(obj)}\n+\n     def get_paginator(self, *args, **kwargs):\n         \"\"\"Use the ModelAdmin's paginator.\"\"\"\n         return self.model_admin.get_paginator(self.request, *args, **kwargs)\n"
+ },
+ {
+  "instance_id": "django__django-16139",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/django/contrib/auth/forms.py b/django/contrib/auth/forms.py\nindex b3cfc6723c..f6c4b7fc2f 100755\n--- a/django/contrib/auth/forms.py\n+++ b/django/contrib/auth/forms.py\n@@ -163,7 +163,7 @@ class UserChangeForm(forms.ModelForm):\n         super().__init__(*args, **kwargs)\n         password = self.fields.get(\"password\")\n         if password:\n-            password.help_text = password.help_text.format(\"../password/\")\n+            password.help_text = password.help_text.format(f\"../../{self.instance.pk}/password/\")\n         user_permissions = self.fields.get(\"user_permissions\")\n         if user_permissions:\n             user_permissions.queryset = user_permissions.queryset.select_related(\n"
+ },
+ {
+  "instance_id": "django__django-16595",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/django/db/migrations/operations/fields.py b/django/db/migrations/operations/fields.py\nindex cd3aab43ad..e2682aeac0 100755\n--- a/django/db/migrations/operations/fields.py\n+++ b/django/db/migrations/operations/fields.py\n@@ -264,6 +264,10 @@ class AlterField(FieldOperation):\n                     field=self.field,\n                 ),\n             ]\n+        elif isinstance(operation, AlterField) and self.is_same_field_operation(\n+            operation\n+        ):\n+            return [operation]\n         return super().reduce(operation, app_label)\n \n \n"
+ },
+ {
+  "instance_id": "pydata__xarray-4094",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/xarray/core/dataarray.py b/xarray/core/dataarray.py\nindex b0df8749..2aab5b54 100755\n--- a/xarray/core/dataarray.py\n+++ b/xarray/core/dataarray.py\n@@ -1961,7 +1961,7 @@ class DataArray(AbstractArray, DataWithCoords):\n         # pull variables out of datarray\n         data_dict = {}\n         for k in variables:\n-            data_dict[k] = self.sel({variable_dim: k}).squeeze(drop=True)\n+            data_dict[k] = self.sel({variable_dim: k}).squeeze(drop=True).drop_vars(dim, errors=\"ignore\")\n \n         # unstacked dataset\n         return Dataset(data_dict)\n"
+ },
+ {
+  "instance_id": "pytest-dev__pytest-7432",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/src/_pytest/skipping.py b/src/_pytest/skipping.py\nindex 7bd975e5a..fe663d449 100755\n--- a/src/_pytest/skipping.py\n+++ b/src/_pytest/skipping.py\n@@ -270,14 +270,14 @@ def pytest_runtest_makereport(item: Item, call: CallInfo[None]):\n         else:\n             rep.longrepr = \"Unexpected success\"\n         rep.outcome = \"failed\"\n-    elif item.config.option.runxfail:\n-        pass  # don't interfere\n     elif call.excinfo and isinstance(call.excinfo.value, xfail.Exception):\n         assert call.excinfo.value.msg is not None\n         rep.wasxfail = \"reason: \" + call.excinfo.value.msg\n         rep.outcome = \"skipped\"\n     elif not rep.skipped and xfailed:\n-        if call.excinfo:\n+        if item.config.option.runxfail:\n+            pass  # don't interfere\n+        elif call.excinfo:\n             raises = xfailed.raises\n             if raises is not None and not isinstance(call.excinfo.value, raises):\n                 rep.outcome = \"failed\"\n"
+ },
+ {
+  "instance_id": "scikit-learn__scikit-learn-13142",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/sklearn/mixture/base.py b/sklearn/mixture/base.py\nindex bd34333c0..f1f72bb24 100755\n--- a/sklearn/mixture/base.py\n+++ b/sklearn/mixture/base.py\n@@ -257,6 +257,7 @@ class BaseMixture(DensityMixin, BaseEstimator, metaclass=ABCMeta):\n                 best_params = self._get_parameters()\n                 best_n_iter = n_iter\n \n+        self._set_parameters(best_params)\n         # Always do a final e-step to guarantee that the labels returned by\n         # fit_predict(X) are always consistent with fit(X).predict(X)\n         # for any value of max_iter and tol (and any random_state).\n@@ -269,7 +270,6 @@ class BaseMixture(DensityMixin, BaseEstimator, metaclass=ABCMeta):\n                           'or check for degenerate data.'\n                           % (init + 1), ConvergenceWarning)\n \n-        self._set_parameters(best_params)\n         self.n_iter_ = best_n_iter\n         self.lower_bound_ = max_lower_bound\n \n"
+ },
+ {
+  "instance_id": "sphinx-doc__sphinx-8721",
+  "model_name_or_path": "replay",
+  "model_patch": "diff --git a/sphinx/ext/viewcode.py b/sphinx/ext/viewcode.py\nindex a7d52a91c..060604e25 100755\n--- a/sphinx/ext/viewcode.py\n+++ b/sphinx/ext/viewcode.py\n@@ -182,6 +182,8 @@ def collect_pages(app: Sphinx) -> Generator[Tuple[str, Dict[str, Any], str], Non\n     env = app.builder.env\n     if not hasattr(env, '_viewcode_modules'):\n         return\n+    if app.builder.name.startswith(\"epub\") and not env.config.viewcode_enable_epub:\n+        return\n     highlighter = app.builder.highlighter  # type: ignore\n     urito = app.builder.get_relative_uri\n \n"
+ }
+]
