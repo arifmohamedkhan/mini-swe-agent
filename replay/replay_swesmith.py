@@ -54,8 +54,15 @@ CMD_TIMEOUT, TEST_TIMEOUT, RUN_BUDGET = 120, 300, 1800  # seconds
 P2P_PER_EDIT, P2P_FINAL = 20, 200  # PASS_TO_PASS tests sampled after each edit / at the end
 F2P_PER_EDIT, F2P_FINAL = 50, 300  # FAIL_TO_PASS tests sampled likewise (some tasks list thousands)
 # Test ids go through a file: thousands of ids on one command line exceed the kernel's argument limit.
-TEST_CMD = ("python -c \"import sys, pytest; sys.exit(pytest.main([t for t in open('{tests_file}').read()"
+TEST_CMD = ("python -c \"import sys, pytest; sys.path.append('/tmp/_replay_testdeps'); "
+            "sys.exit(pytest.main([t for t in open('{tests_file}').read()"
             ".split(chr(10)) if t] + ['-rA', '-p', 'no:cacheprovider', '--tb=no', '-q', '--color=no']))\"")
+# When the tests cannot even be collected because a test-only dependency is missing (pydantic's conftest
+# imports jsonschema, which its image lacks), it is installed into /tmp/_replay_testdeps, used only by
+# the test runner, and the tests are run again.
+TESTDEP_INSTALL = "python -m pip install -q --target /tmp/_replay_testdeps {pkg}"
+PIP_NAMES = {"yaml": "pyyaml", "PIL": "pillow", "sklearn": "scikit-learn", "cv2": "opencv-python",
+             "bs4": "beautifulsoup4", "dateutil": "python-dateutil"}
 # Repositories with compiled extensions (pandas, via meson) rebuild on the first import after a checkout,
 # which takes minutes; one warm-up import per container keeps that out of the test timings.
 WARMUP_TIMEOUT = 3600
@@ -675,16 +682,24 @@ def view_score(ex, actions):
 
 
 def test_files(tests):
-    return sorted({t.split("::")[0] for t in tests if t.split("::")[0].endswith(".py")})
+    """Files named by test ids, of any kind (pygments' tests are data files such as 'tests/x/y.txt::')."""
+    return sorted({t.split("::")[0] for t in tests if "/" in t.split("::")[0] or t.split("::")[0].endswith(".py")})
 
 
-def run_tests(ex, tests, refs, timeout):
+def hidden_test_files(ex):
+    """Test files the task's last commit deleted. SWE-smith hides the failing tests from the agent this
+    way; a harness restores them, so the replay restores them for every test run (and removes them after)."""
+    rc, text = ex.sh("cd /testbed && git diff --name-only --diff-filter=D HEAD~1 HEAD 2>/dev/null", timeout=60)
+    return [f for f in text.split() if "test" in f.lower()] if rc == 0 else []
+
+
+def run_tests(ex, tests, refs, timeout, extra_files=(), repo_module=None, _retry=True):
     """Run the task's tests on the current code, with test files restored to their original versions
     (as a harness does), then put the agent's versions back. SWE-smith removes the failing tests' files
     from the agent's working tree, so the originals come from the refs (HEAD~1 for SWE-smith branches)."""
     if not tests:
         return {"ran": False}
-    files = test_files(tests)
+    files = sorted(set(test_files(tests)) | set(extra_files))
     swap, restore = [], []
     for i, f in enumerate(files):
         keep = f"/tmp/_replay_keep_{i}"
@@ -694,7 +709,7 @@ def run_tests(ex, tests, refs, timeout):
         restore.append(f"if [ -e {keep}.had ]; then cp {keep} '{f}'; else rm -f '{f}'; fi")
     ex.put("/tmp/_replay_swap.sh", "cd /testbed\n" + "\n".join(swap) + "\n")
     ex.put("/tmp/_replay_restore.sh", "cd /testbed\n" + "\n".join(restore) + "\n")
-    ex.put("/tmp/_replay_tests.txt", "\n".join(tests) + "\n")
+    ex.put("/tmp/_replay_tests.txt", "\n".join(t[:-2] if t.endswith("::") else t for t in tests) + "\n")
     ex.sh("bash /tmp/_replay_swap.sh", timeout=120)
     rc, text = ex.sh(f"source /tmp/_replay_env.sh 2>/dev/null; cd /testbed && timeout {timeout} "
                      f"{TEST_CMD.format(tests_file='/tmp/_replay_tests.txt')} 2>&1", timeout=timeout + 60)
@@ -702,7 +717,21 @@ def run_tests(ex, tests, refs, timeout):
     status = {}
     for st, node in TEST_LINE_RE.findall(re.sub(r"\x1b\[[0-9;]*[A-Za-z]|\r", "", ex.untranslate(text))):
         status[node.strip()] = st
+    missing = re.search(r"No module named '([\w.]+)'", text)
+    if not status and missing and _retry:
+        mod = missing.group(1).split(".")[0]
+        if mod != repo_module:
+            pkg = PIP_NAMES.get(mod, mod)
+            irc, itext = ex.sh(f"source /tmp/_replay_env.sh 2>/dev/null; {TESTDEP_INSTALL.format(pkg=pkg)}", timeout=900)
+            res = run_tests(ex, tests, refs, timeout, extra_files, repo_module, _retry=False)
+            res["installed_for_tests"] = pkg if irc == 0 else f"{pkg} (install failed: {itext.strip()[-120:]})"
+            return res
     return {"ran": True, "rc": rc, "status": status, "tail": text[-400:]}
+
+
+def repo_module(inst):
+    repo = inst["instance_id"].split(".")[0]
+    return WARMUP_IMPORTS.get(repo) or repo.split("__")[-1].replace("-", "_").lower()
 
 
 def warmup(ex, inst):
@@ -721,15 +750,17 @@ def shlex_quote(s):
     return shlex.quote(s)
 
 
-def summarize_tests(res, f2p, p2p):
+def summarize_tests(res, f2p, p2p, keep_tail=False):
     if not res.get("ran"):
         return None
     st = res["status"]
+    extra = {"rc": res.get("rc"), "tail": res.get("tail", "")[-400:]} if keep_tail else {}
     f_pass = sum(st.get(t) == "PASSED" for t in f2p)
     p_fail = sum(st.get(t) in ("FAILED", "ERROR") for t in p2p)
     return {"f2p_pass": f_pass, "f2p_total": len(f2p), "p2p_fail": p_fail, "p2p_total": len(p2p),
             "p2p_seen": sum(t in st for t in p2p), "fixed": f_pass == len(f2p) and len(f2p) > 0,
-            "parsed": bool(st)}
+            "parsed": bool(st), "f2p_fail": [t for t in f2p if st.get(t) in ("FAILED", "ERROR")][:5],
+            "f2p_missing": sum(t not in st for t in f2p), **extra}
 
 
 # ============================================================================ STEPS
@@ -745,6 +776,15 @@ def load_jsonl(path):
                 except json.JSONDecodeError:
                     pass
     return rows
+
+
+def load_results():
+    """results.jsonl with one record per run (the last written), plus the ids written more than once."""
+    path = os.path.join(OUT_DIR, "results.jsonl")
+    rows = load_jsonl(path) if os.path.exists(path) else []
+    counts = Counter(r["run_id"] for r in rows)
+    latest = {r["run_id"]: r for r in rows}
+    return list(latest.values()), {k for k, v in counts.items() if v > 1}, len(rows)
 
 
 def as_list(v):
@@ -1000,7 +1040,7 @@ def step_probe():
                     refs_used[found[0] == start] += 1
             f2p_s = random.Random(0).sample(f2p, min(len(f2p), F2P_PER_EDIT))
             t = time.time()
-            res = run_tests(ex, f2p_s + p2p[:10], refs, TEST_TIMEOUT)
+            res = run_tests(ex, f2p_s + p2p[:10], refs, TEST_TIMEOUT, hidden_test_files(ex), repo_module(inst))
             s = summarize_tests(res, f2p_s, p2p[:10])
             out(f"    test run took {time.time() - t:.0f}s ({len(f2p_s)} of {len(f2p)} failing tests, "
                 f"{len(p2p[:10])} passing)")
@@ -1049,11 +1089,16 @@ def replay_run(g, inst, image, probe):
             res["setup_error"] = msg
             return res
         refs = [start] + [r for r in (inst.get("base_commit"), "HEAD", "HEAD~1") if r]
+        hidden = hidden_test_files(ex)
+        res["hidden_test_files"] = len(hidden)
+        mod = repo_module(inst)
+        tests_at = lambda f2p_, p2p_: run_tests(ex, f2p_ + p2p_, refs, TEST_TIMEOUT, hidden, mod)
         res["view_score"] = view_score(ex, actions)
         res["warmup"] = warmup(ex, inst)
         res["f2p_sampled"] = [len(f2p_edit), len(f2p_final), len(f2p)]
-        res["start_tests"] = summarize_tests(run_tests(ex, f2p_edit + p2p_edit, refs, TEST_TIMEOUT), f2p_edit,
-                                             p2p_edit)
+        start_res = tests_at(f2p_edit, p2p_edit)
+        res["test_deps"] = start_res.get("installed_for_tests")
+        res["start_tests"] = summarize_tests(start_res, f2p_edit, p2p_edit, keep_tail=True)
         by_a = {e["a"]: e for e in edits}
         next_of = {e["_next"]: e["a"] for e in edits if e["_next"] is not None}
         execs, eds = [], []
@@ -1070,8 +1115,7 @@ def replay_run(g, inst, image, probe):
                            variant=r["variant"], msg=r["msg"][:80], next_exec=e["next_exec"],
                            next_exec_loose=e["next_exec_loose"], next_i=e["_next"])
                 if r["ok"] and e["applied"] and not e["scratch"]:
-                    rec["tests"] = summarize_tests(run_tests(ex, f2p_edit + p2p_edit, refs, TEST_TIMEOUT),
-                                                   f2p_edit, p2p_edit)
+                    rec["tests"] = summarize_tests(tests_at(f2p_edit, p2p_edit), f2p_edit, p2p_edit)
                 eds.append(rec)
             elif a["tool"] == "bash":
                 rc, o = run_bash(ex, a["text"], CMD_TIMEOUT)
@@ -1080,8 +1124,7 @@ def replay_run(g, inst, image, probe):
                                       sim=round(similarity(a["out"], o), 3), recorded_strict=exec_state(a["out"])[0],
                                       replay_strict=exec_state(o)[0], replay_loose=exec_state_loose(o),
                                       replay_head=norm_output(o)[:160]))
-        res["final_tests"] = summarize_tests(run_tests(ex, f2p_final + p2p_final, refs, TEST_TIMEOUT), f2p_final,
-                                             p2p_final)
+        res["final_tests"] = summarize_tests(tests_at(f2p_final, p2p_final), f2p_final, p2p_final, keep_tail=True)
         res.update(execs=execs, edits=eds, seconds=round(time.time() - t0))
         return res
     finally:
@@ -1090,6 +1133,14 @@ def replay_run(g, inst, image, probe):
 
 def step_replay():
     header("REPLAY")
+    import fcntl
+    os.makedirs(OUT_DIR, exist_ok=True)
+    lock = open(os.path.join(OUT_DIR, "replay.lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        out("  another replay is already running in this folder; this one exits without doing anything")
+        return
     probe = json.load(open(os.path.join(OUT_DIR, "probe.json")))
     sample, instances = load_sample()
     path = os.path.join(OUT_DIR, "results.jsonl")
@@ -1160,36 +1211,93 @@ def agreement(rows, label, truth, rng):
                 acc_ci=ci(accs), kappa=kappa(tp, fp, fn, tn), kappa_ci=ci(ks))
 
 
+def fidelity(r):
+    """The fidelity checks a replayed run fails, as readable reasons (empty = faithful)."""
+    if not r.get("setup_ok"):
+        return ["setup failed: " + str(r.get("setup_error", ""))[:120]]
+    why = []
+    vs = r.get("view_score")
+    if vs is not None and vs < 0.9:
+        why.append(f"starting files match the agent's views only {100 * vs:.0f}%")
+    ed = [e for e in r["edits"] if e["recorded_applied"] is not None and e["replay_ok"] is not None]
+    if ed:
+        agree = sum(e["recorded_applied"] == e["replay_ok"] for e in ed) / len(ed)
+        if agree < 0.9:
+            why.append(f"editor outcomes reproduced only {100 * agree:.0f}%")
+    st, ft = r.get("start_tests"), r.get("final_tests")
+    if not (st and st["parsed"]):
+        why.append("start: test results not read" + (f" (exit {st.get('rc')}; tail: "
+                   f"{st.get('tail', '')[-160:]!r})" if st and "tail" in st else ""))
+    elif st["fixed"]:
+        why.append("start: the failing tests already pass")
+    if not (ft and ft["parsed"]):
+        why.append("final: test results not read" + (f" (exit {ft.get('rc')}; tail: "
+                   f"{ft.get('tail', '')[-160:]!r})" if ft and "tail" in ft else ""))
+    else:
+        final_res = ft["fixed"] and ft["p2p_fail"] == 0
+        if final_res != r["resolved"]:
+            why.append(f"final: tests say {'resolved' if final_res else 'not resolved'}, recorded "
+                       f"{'resolved' if r['resolved'] else 'not resolved'} (failing tests passing "
+                       f"{ft['f2p_pass']}/{ft['f2p_total']}, not run {ft.get('f2p_missing', '?')}; "
+                       f"passing tests broken {ft['p2p_fail']}/{ft['p2p_total']})")
+    if r.get("stopped"):
+        why.append("stopped by the time budget")
+    return why
+
+
+def step_diagnose():
+    header("DIAGNOSE: why replayed runs fail the fidelity checks")
+    res, dups, n_lines = load_results()
+    out(f"  results.jsonl: {n_lines} records for {len(res)} distinct runs"
+        + (f"; {len(dups)} runs written more than once, which happens when two replays run at the same time "
+           f"and can corrupt both copies. --step requeue redoes them." if dups else ""))
+    bad = [(r, fidelity(r) + (["written more than once"] if r["run_id"] in dups else [])) for r in res]
+    bad = [(r, w) for r, w in bad if w]
+    out(f"  {len(res)} runs; {len(bad)} fail at least one check")
+    kinds = Counter(w.split(":")[0] + (": " + w.split(":")[1].split("(")[0].strip() if ":" in w else "")
+                    for _, ws in bad for w in ws)
+    for k, v in kinds.most_common():
+        out(f"    {v:>3}  {k[:90]}")
+    by_repo = Counter(r["repo"] for r, _ in bad)
+    out("  by repository: " + ", ".join(f"{k} {v}/{sum(x['repo'] == k for x in res)}" for k, v in by_repo.most_common()))
+    out("")
+    for r, ws in bad:
+        out(f"  {r['run_id']} {r['instance_id'][:55]} (recorded {'resolved' if r['resolved'] else 'failed'}; "
+            f"hidden test files restored {r.get('hidden_test_files', '?')}; installed for tests: {r.get('test_deps')})")
+        for w in ws:
+            out(f"      {w[:300]}")
+    out("\n  Runs replayed before this version have no test-output tails. To get them, run --step requeue")
+    out("  (it removes the unfaithful runs from results.jsonl), then --step replay, then --step diagnose again.")
+
+
+def step_requeue():
+    header("REQUEUE: remove unfaithful runs from results.jsonl so the next replay redoes them")
+    path = os.path.join(OUT_DIR, "results.jsonl")
+    res, dups, n_lines = load_results()
+    keep = [r for r in res if not fidelity(r) and r["run_id"] not in dups]
+    os.replace(path, path + ".bak")
+    with open(path, "w") as f:
+        for r in keep:
+            f.write(json.dumps(r) + "\n")
+    out(f"  kept {len(keep)} faithful runs; {len(res) - len(keep)} will be replayed again, including "
+        f"{len(dups)} written more than once (the previous file is saved as results.jsonl.bak)")
+
+
 def step_analyze():
     header("ANALYZE: replay fidelity, label validation, and harness-verified stopping")
-    res = load_jsonl(os.path.join(OUT_DIR, "results.jsonl"))
+    res, dups, n_lines = load_results()
+    if dups:
+        out(f"  WARNING: {len(dups)} runs were written more than once (two replays ran at the same time); "
+            f"run --step requeue and --step replay before trusting these numbers")
     rng = random.Random(SEED)
-    fid = Counter()
-    faithful = []
-    for r in res:
-        fid["runs"] += 1
-        if not r.get("setup_ok"):
-            fid["setup failed"] += 1
-            continue
-        vs = r.get("view_score")
-        ed = [e for e in r["edits"] if e["recorded_applied"] is not None and e["replay_ok"] is not None]
-        ed_agree = sum(e["recorded_applied"] == e["replay_ok"] for e in ed) / len(ed) if ed else None
-        ft, st = r.get("final_tests"), r.get("start_tests")
-        final_res = bool(ft and ft["parsed"] and ft["fixed"] and ft["p2p_fail"] == 0) if ft and ft["parsed"] else None
-        r["_final_res"] = final_res
-        checks = {"starting files match the agent's views (>= 90%)": vs is None or vs >= 0.9,
-                  "editor outcomes reproduce the recorded ones (>= 90%)": ed_agree is None or ed_agree >= 0.9,
-                  "failing tests fail at the start": bool(st and st["parsed"] and not st["fixed"]),
-                  "final tests reproduce the recorded resolved label": final_res is not None and final_res == r["resolved"]}
-        for k, v in checks.items():
-            fid[k] += v
-        if all(checks.values()):
-            faithful.append(r)
-    out(f"  {fid['runs']} runs replayed; setup failed {fid['setup failed']}")
-    for k in ("starting files match the agent's views (>= 90%)", "editor outcomes reproduce the recorded ones (>= 90%)",
-              "failing tests fail at the start", "final tests reproduce the recorded resolved label"):
-        out(f"    {k}: {fid[k]}")
-    out(f"  faithful on every check: {len(faithful)} runs (only these enter the tables below)")
+    faithful = [r for r in res if not fidelity(r)]
+    reasons = Counter(w.split(":")[0] for r in res for w in fidelity(r))
+    out(f"  {len(res)} runs replayed; faithful on every check: {len(faithful)} "
+        f"({sum(r['resolved'] for r in faithful)} resolved, {sum(not r['resolved'] for r in faithful)} failed); "
+        f"of all replayed runs, {sum(r['resolved'] for r in res)} resolved")
+    for k, v in reasons.most_common():
+        out(f"    runs failing a check on {k}: {v}")
+    out("  (only faithful runs enter the tables below; --step diagnose lists the reasons per run)")
     sims = [x["sim"] for r in faithful for x in r["execs"]]
     if sims:
         out(f"  replayed execution outputs: median similarity to the recorded output {statistics.median(sims):.2f}; "
@@ -1224,6 +1332,22 @@ def step_analyze():
                 f"kappa {a['kappa']:.2f} [{a['kappa_ci'][0]:.2f}, {a['kappa_ci'][1]:.2f}]; label fail & true fail "
                 f"{a['tp']}, label fail & true pass {a['fp']}, label pass & true fail {a['fn']}, both pass {a['tn']} "
                 f"(n={a['n']}, {a['runs']} runs)")
+    # failed runs never had working code, so every passing check in them is a false pass
+    fail_eds = [(r, e) for r in faithful if not r["resolved"] for e in r["edits"]
+                if e.get("tests") and e["tests"]["parsed"] and e["next_exec"] in ("pass", "fail")]
+    never_fixed = [r for r in faithful if not r["resolved"]
+                   and not any(e.get("tests") and e["tests"]["fixed"] for e in r["edits"])]
+    if fail_eds:
+        n = len(fail_eds)
+        out(f"\n  in failed runs whose code never passed the task's tests ({len(never_fixed)} of "
+            f"{sum(not r['resolved'] for r in faithful)}), the agent's own next check passed after "
+            f"{sum(e['next_exec'] == 'pass' for _, e in fail_eds)}/{n} tested edits (strict) and "
+            f"{sum(e['next_exec_loose'] == 'pass' for _, e in fail_eds)}/{n} (loose); each such pass is false")
+        last_pass = sum(1 for r in faithful if not r["resolved"] and [e for e in r["edits"] if e["next_exec"] in
+                        ("pass", "fail")] and [e for e in r["edits"] if e["next_exec"] in ("pass", "fail")][-1]
+                        ["next_exec"] == "pass")
+        out(f"  failed runs whose last tested edit's check passed (the agent stopped on a passing check of code "
+            f"that does not work): {last_pass} of {sum(not r['resolved'] for r in faithful)}")
     gap = [r for r in rows if not r["strict"] and r["loose"]]
     if gap:
         ef = [r["exit_fail"] for r in gap if r["exit_fail"] is not None]
@@ -1252,6 +1376,21 @@ def step_analyze():
             out(f"  k={k}: paper metric net {100 * (resc_old - harm_old) / n:+.1f}% "
                 f"(rescued {resc_old}, harmed {harm_old}); tests net {100 * (resc - harm) / n:+.1f}% "
                 f"(rescued {resc}, harmed {harm}); n={n}")
+    header("THE TASK'S TESTS AFTER EVERY SOURCE EDIT (objective progress, faithful runs)")
+    seqs = {r["run_id"]: (r["resolved"], [bool(e["tests"]["fixed"] and e["tests"]["p2p_fail"] == 0)
+                                          for e in r["edits"] if e.get("tests") and e["tests"]["parsed"]])
+            for r in faithful}
+    for k in range(1, 9):
+        at = [s_[k - 1] for _, s_ in seqs.values() if len(s_) >= k]
+        if len(at) >= 5:
+            out(f"  after source edit {k}: tests pass in {sum(at)}/{len(at)} runs ({100 * sum(at) / len(at):.0f}%)")
+    firsts = [s_.index(True) + 1 for res_, s_ in seqs.values() if res_ and True in s_]
+    if firsts:
+        out(f"  resolved runs: first edit after which the tests pass, median {statistics.median(firsts):.0f} "
+            f"(range {min(firsts)}-{max(firsts)}; {len(firsts)} runs)")
+    lost = sum(1 for _, s_ in seqs.values() if True in s_ and not all(s_[s_.index(True):]))
+    out(f"  runs whose tests passed at some edit and failed again at a later one (a working fix broken): "
+        f"{lost} of {sum(1 for _, s_ in seqs.values() if True in s_)}")
     any_fix = sum((not r["resolved"]) and any(e.get("tests") and e["tests"]["fixed"] and e["tests"]["p2p_fail"] == 0
                                               for e in r["edits"]) for r in faithful)
     out(f"  failed runs whose code passed the task's tests at some edit (the most any stopping rule could rescue): "
@@ -1271,11 +1410,12 @@ def save_report(name):
 def main(argv=None):
     import argparse
     p = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    p.add_argument("--step", required=True, choices=["select", "fetch", "probe", "replay", "analyze"])
+    p.add_argument("--step", required=True,
+                   choices=["select", "fetch", "probe", "replay", "analyze", "diagnose", "requeue"])
     step = p.parse_args(argv).step
     LINES.clear()
     {"select": step_select, "fetch": step_fetch, "probe": step_probe, "replay": step_replay,
-     "analyze": step_analyze}[step]()
+     "analyze": step_analyze, "diagnose": step_diagnose, "requeue": step_requeue}[step]()
     save_report(f"REPLAY_{step.upper()}.md")
 
 
