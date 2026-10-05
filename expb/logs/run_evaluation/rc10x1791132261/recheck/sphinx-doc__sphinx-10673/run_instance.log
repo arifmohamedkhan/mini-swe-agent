@@ -1,0 +1,108 @@
+2026-10-04 16:48:25,865 - INFO - Image not found locally, attempting to pull...
+2026-10-04 16:50:16,676 - INFO - Creating container for sphinx-doc__sphinx-10673...
+2026-10-04 16:50:23,047 - INFO - Container for sphinx-doc__sphinx-10673 created: 696bcfa0461935582a1e4f2c88331b6adf1195b451e95be11274d108bcf6e9e8
+2026-10-04 16:50:23,666 - INFO - Container for sphinx-doc__sphinx-10673 started: 696bcfa0461935582a1e4f2c88331b6adf1195b451e95be11274d108bcf6e9e8
+2026-10-04 16:50:23,673 - INFO - Intermediate patch for sphinx-doc__sphinx-10673 written to logs/run_evaluation/rc10x1791132261/recheck/sphinx-doc__sphinx-10673/patch.diff, now applying to container...
+2026-10-04 16:50:23,916 - INFO - >>>>> Applied Patch:
+Checking patch sphinx/directives/other.py...
+Applied patch sphinx/directives/other.py cleanly.
+
+2026-10-04 16:50:24,516 - INFO - Git diff before:
+diff --git a/sphinx/directives/other.py b/sphinx/directives/other.py
+index 35e16e623..d37ffaf38 100644
+--- a/sphinx/directives/other.py
++++ b/sphinx/directives/other.py
+@@ -119,16 +119,23 @@ class TocTree(SphinxDirective):
+                 if url_re.match(ref) or ref == 'self':
+                     toctree['entries'].append((title, ref))
+                 elif docname not in self.env.found_docs:
+-                    if excluded(self.env.doc2path(docname, False)):
++                    if docname in ('genindex', 'modindex', 'search'):
++                        toctree['entries'].append((title, docname))
++                        toctree['includefiles'].append(docname)
++                    elif excluded(self.env.doc2path(docname, False)):
+                         message = __('toctree contains reference to excluded document %r')
+                         subtype = 'excluded'
++
++                        logger.warning(message, docname, type='toc', subtype=subtype,
++                                       location=toctree)
++                        self.env.note_reread()
+                     else:
+                         message = __('toctree contains reference to nonexisting document %r')
+                         subtype = 'not_readable'
+ 
+-                    logger.warning(message, docname, type='toc', subtype=subtype,
+-                                   location=toctree)
+-                    self.env.note_reread()
++                        logger.warning(message, docname, type='toc', subtype=subtype,
++                                       location=toctree)
++                        self.env.note_reread()
+                 else:
+                     if docname in all_docnames:
+                         all_docnames.remove(docname)
+2026-10-04 16:50:24,519 - INFO - Eval script for sphinx-doc__sphinx-10673 written to logs/run_evaluation/rc10x1791132261/recheck/sphinx-doc__sphinx-10673/eval.sh; copying to container...
+2026-10-04 16:50:40,798 - INFO - Test runtime: 16.15 seconds
+2026-10-04 16:50:40,799 - INFO - Test output for sphinx-doc__sphinx-10673 written to logs/run_evaluation/rc10x1791132261/recheck/sphinx-doc__sphinx-10673/test_output.txt
+2026-10-04 16:50:40,913 - INFO - Git diff after:
+diff --git a/sphinx/directives/other.py b/sphinx/directives/other.py
+index 35e16e623..d37ffaf38 100644
+--- a/sphinx/directives/other.py
++++ b/sphinx/directives/other.py
+@@ -119,16 +119,23 @@ class TocTree(SphinxDirective):
+                 if url_re.match(ref) or ref == 'self':
+                     toctree['entries'].append((title, ref))
+                 elif docname not in self.env.found_docs:
+-                    if excluded(self.env.doc2path(docname, False)):
++                    if docname in ('genindex', 'modindex', 'search'):
++                        toctree['entries'].append((title, docname))
++                        toctree['includefiles'].append(docname)
++                    elif excluded(self.env.doc2path(docname, False)):
+                         message = __('toctree contains reference to excluded document %r')
+                         subtype = 'excluded'
++
++                        logger.warning(message, docname, type='toc', subtype=subtype,
++                                       location=toctree)
++                        self.env.note_reread()
+                     else:
+                         message = __('toctree contains reference to nonexisting document %r')
+                         subtype = 'not_readable'
+ 
+-                    logger.warning(message, docname, type='toc', subtype=subtype,
+-                                   location=toctree)
+-                    self.env.note_reread()
++                        logger.warning(message, docname, type='toc', subtype=subtype,
++                                       location=toctree)
++                        self.env.note_reread()
+                 else:
+                     if docname in all_docnames:
+                         all_docnames.remove(docname)
+diff --git a/tests/test_environment_toctree.py b/tests/test_environment_toctree.py
+index 60a9826fd..8d5cfc0b9 100644
+--- a/tests/test_environment_toctree.py
++++ b/tests/test_environment_toctree.py
+@@ -346,3 +346,17 @@ def test_get_toctree_for_includehidden(app):
+ 
+     assert_node(toctree[2],
+                 [bullet_list, list_item, compact_paragraph, reference, "baz"])
++
++
++@pytest.mark.sphinx('xml', testroot='toctree-index')
++def test_toctree_index(app):
++    app.build()
++    toctree = app.env.tocs['index']
++    assert_node(toctree,
++                [bullet_list, ([list_item, (compact_paragraph,  # [0][0]
++                                            [bullet_list, (addnodes.toctree,  # [0][1][0]
++                                                           addnodes.toctree)])])])  # [0][1][1]
++    assert_node(toctree[0][1][1], addnodes.toctree,
++                caption="Indices", glob=False, hidden=False,
++                titlesonly=False, maxdepth=-1, numbered=0,
++                entries=[(None, 'genindex'), (None, 'modindex'), (None, 'search')])
+2026-10-04 16:50:40,913 - INFO - Git diff changed after running eval script
+2026-10-04 16:50:40,913 - INFO - Grading answer for sphinx-doc__sphinx-10673...
+2026-10-04 16:50:40,925 - INFO - report: {'sphinx-doc__sphinx-10673': {'patch_is_None': False, 'patch_exists': True, 'patch_successfully_applied': True, 'resolved': True, 'infra_failure': False, 'tests_status': {'FAIL_TO_PASS': {'success': ['tests/test_environment_toctree.py::test_toctree_index'], 'failure': []}, 'PASS_TO_PASS': {'success': ['tests/test_environment_toctree.py::test_process_doc', 'tests/test_environment_toctree.py::test_glob', 'tests/test_environment_toctree.py::test_get_toc_for', 'tests/test_environment_toctree.py::test_get_toc_for_only', 'tests/test_environment_toctree.py::test_get_toc_for_tocdepth', 'tests/test_environment_toctree.py::test_get_toctree_for', 'tests/test_environment_toctree.py::test_get_toctree_for_collapse', 'tests/test_environment_toctree.py::test_get_toctree_for_maxdepth', 'tests/test_environment_toctree.py::test_get_toctree_for_includehidden'], 'failure': []}, 'FAIL_TO_FAIL': {'success': [], 'failure': []}, 'PASS_TO_FAIL': {'success': [], 'failure': []}}}}
+Result for sphinx-doc__sphinx-10673: resolved: True
+2026-10-04 16:50:40,926 - INFO - Attempting to stop container sweb.eval.sphinx-doc__sphinx-10673.rc10x1791132261...
+2026-10-04 16:50:56,526 - INFO - Container sweb.eval.sphinx-doc__sphinx-10673.rc10x1791132261 stopped successfully.
+2026-10-04 16:50:56,529 - INFO - Attempting to remove container sweb.eval.sphinx-doc__sphinx-10673.rc10x1791132261...
+2026-10-04 16:50:56,730 - INFO - Container sweb.eval.sphinx-doc__sphinx-10673.rc10x1791132261 removed successfully.
